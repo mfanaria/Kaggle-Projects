@@ -1,5 +1,5 @@
 # Import data
-setwd('C:/Users/Ollie/OneDrive - Swansea University/Other/Projects/R/Suicide')
+# setwd(...)
 suicide_data = read.csv('master.csv')
 
 ###############################################################################
