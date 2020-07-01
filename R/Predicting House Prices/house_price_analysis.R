@@ -4,7 +4,7 @@ house_data = read.csv('kc_house_data.csv')
 
 #### Packages ################################################################# 
 
-# Import packages (alphabetise these)
+# Import packages
 library(dplyr)
 library(gbm)
 library(glmnet)
