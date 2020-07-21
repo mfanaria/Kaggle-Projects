@@ -1,0 +1,1716 @@
+---
+title: 'Binary Classification of Heart Disease'
+author: 'Ollie Thwaites'
+date: '21/07/2020'
+output: 
+  html_document:
+    number_sections: true
+    toc: true
+---
+
+For photos, upload them to kaggle, then use:
+<img src = "file path">
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+# Introduction
+https://en.wikipedia.org/wiki/Coronary_artery_disease
+Heart disease involves a reduction in blood flow to the heart muscles due to blockages in the arteries of the heart which are commonly caused by a build-up of plaque.
+
+The full code used in this analysis can be found on my github
+
+## Import data
+The dataset for this analysis can be found on kaggle here
+and the original dataset with descriptions is found here
+
+```{r import data, echo = TRUE}
+#setwd()
+
+# activate required libraries
+library(class)
+library(dplyr)
+library(gbm)
+library(gridExtra)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(tidyverse)
+library(tree)
+
+# import data (change link on kaggle)
+hd_data = read.csv('heart_cleveland_upload.csv')
+```
+
+## Tidy data
+Let's look at the first few rows of data:
+
+```{r glimpse, echo = TRUE}
+# give an overview of the data
+glimpse(hd_data)
+```
+
+There are 13 variables explaining the condition of the patient on their admission to hospital. These will be explained in the next section.
+I will change some of the variable names so they are more easily interpretable:
+
+```{r rename variables, echo = TRUE}
+# rename variables
+colnames(hd_data)[3] = 'chest_pain'
+colnames(hd_data)[4] = 'resting_bp'
+colnames(hd_data)[5] = 'cholesterol'
+colnames(hd_data)[6] = 'fasting_blood_sugar'
+colnames(hd_data)[7] = 'resting_ecg'
+colnames(hd_data)[8] = 'max_heart_rate'
+colnames(hd_data)[9] = 'exercise_induced_angina'
+colnames(hd_data)[10] = 'st_depression'
+colnames(hd_data)[11] = 'st_peak_slope'
+colnames(hd_data)[12] = 'no_major_vessels'
+colnames(hd_data)[13] = 'thallium'
+```
+
+Finally, I'll check if there are any missing data:
+```{r missing data, echo = TRUE}
+sum(is.na(hd_data))
+```
+Excellent, there are no missing data.
+
+# Exploratory Data Analysis
+I am going to some initial data visualisation to understand what each variable means and their relationship with the response, before moving on to the predictive models.
+
+I'll give a brief overview of each variable, though I am not a medical professional and this shouldn't be taken as fact. I will link where I got my information from and you can read the variables descriptions on the link to the original dataset. 
+
+## The Response
+'condition' is a binary variable with a patient having a value of '0' if they do not have heart disease and a value of '1' if they do.
+```{r condition plot, fig.width = 20, fig.height = 15}
+# collate the number of pos/neg cases, and calculate the proportion of 
+# patients with each result
+condition_count <- hd_data %>% # using hd_data
+  group_by(condition) %>% # group all the data from the same result
+  summarise(rows = n(),
+            proportion = rows / length(hd_data$condition))
+  # sum the number of pos/neg cases then calculate the proportion
+
+condition_plot_theme <- theme(axis.title = element_text(size = 22.5),
+                              axis.text = element_text(size = 20),
+                              legend.title = element_text(size = 22.5),
+                              legend.text = element_text(size = 20))
+condition_plot <- ggplot(data = condition_count, 
+                         aes(x = as.factor(condition), y = proportion,
+                             fill = as.factor(condition))) +
+  geom_bar(stat = 'identity') + # create bar chart
+  theme_classic() + # white background, no gridlines
+  xlab('Heart Disease Classification') + # change x axis label
+  ylab('Proportion of Patients') + # change y axis label
+  condition_plot_theme + # change the size of axis titles, axis text,
+  # legend title and legend text
+  scale_y_continuous(breaks = c(seq(0, 1, 0.1)),
+                     labels = c(seq(0, 1, 0.1)),
+                     limits = c(0, 1)) +
+  # change y axis values
+  scale_fill_manual(name = 'Heart Disease Classification', 
+                    labels = c('Did Not Have Disease', 'Did Have Disease'),
+                    values = c('mediumspringgreen', 'firebrick2'))
+  # change legend title, text and fill colour for bars
+condition_plot
+```
+You can see that in this dataset, just over half (53.9%) of the 297 patients did not have heart disease the rest had it (46.1%). 
+
+## Age
+No let's see how heart disease is distributed across different ages and across females and males:
+
+```{r age/sex plot, fig.width = 20, fig.height = 15}
+# collate the number of confirmed cases at each age, 
+# and calculate the proportion of confirmed cases for each age
+age_proportion <- hd_data %>% # using hd_data
+  group_by(age, sex) %>% # group all the data from the same age and sex
+  # i.e. where possible each age should have two rows for each sex
+  summarise(disease = sum(condition),
+            proportion = disease / sum(hd_data$condition))
+  # sum the number of confirmed cases for each age, then calculate
+  # the proportion
+# change the sex binary values to their actual values in age_proportion
+age_proportion$sex[age_proportion$sex == 0] <- 'female'
+age_proportion$sex[age_proportion$sex == 1] <- 'male'
+
+age_plot_theme <- theme(axis.title = element_text(size = 22.5), 
+                        axis.text = element_text(size = 20),
+                        legend.title = element_text(size = 22.5),
+                        legend.text = element_text(size = 20))
+age_plot <- ggplot(data = age_proportion, 
+                   aes(x = age, y = proportion, fill = sex)) +
+  geom_bar(stat = 'identity', position = position_dodge()) + # create bar chart
+  theme_classic() + # white background, no gridlines
+  xlab('Age (Years)') + # change x axis label
+  ylab('Proportion of Confirmed Cases') + # change y axis label
+  age_plot_theme + # change the size of axis titles, axis text,
+  # legend title and legend text
+  scale_x_continuous(breaks = c(seq(29, 77, 1)),
+                     labels = c(seq(29, 77, 1)),
+                     limits = c(28, 78)) +
+  scale_y_continuous(breaks = c(seq(0, 0.08, 0.01)),
+                     labels = c(seq(0, 0.08, 0.01)),
+                     limits = c(0, 0.08)) +
+  # change x and y axis values
+  scale_fill_manual(name = 'Sex', 
+                    labels = c('Female', 'Male'),
+                    values = c('mediumvioletred', 'midnightblue'))
+  # change legend title, text and fill colour for bars
+age_plot
+```
+This plot shows how the proportion of confirmed cases (relative to the total number of confirmed cases) change with age and sex. Here we see that the risk of getting heart disease appears to be relatively low for under-40s with risk generally increasing with age and peaking around the late 50s/early 60s for both sexes.  Males have a wider range of ages with confirmed cases, with females restricted to mainly 55-66 whereas males range from 35-77. 'age' may therefore be a significant predictor of heart disease, in that the risk of having heart disease appears to increase with age.
+Speaking of the sexes, it is clear that there were more confirmed cases of heart disease at almost any age for males compared with females. We might therefore expect 'sex' to also be a significant predictor of heart disease given that more males were confirmed to have it.
+
+## Chest Pain Levels
+Next I'll take a look at how the rating of a patient's chest pain may affect their heart disease classification:
+````{r chest pain plot, fig.width = 20, fig.height = 15}
+# collate the number of confirmed positive and negative cases of heart disease 
+# for each type of chest pain, and calculate the proportion of pos/neg cases 
+# for each type
+chestPain <- hd_data %>% # using hd_data
+  group_by(chest_pain, condition) %>% # group all the data from the chest pain 
+  # type and whether the patient had the condition or not
+  summarise(disease = length(condition),
+            proportion = disease / length(hd_data$condition))
+  # sum the number of pos/neg cases for each type of chest pain, then 
+  # calculate the proportion
+
+chestPain_plot_theme <- theme(axis.title = element_text(size = 22.5),
+                              axis.text = element_text(size = 20),
+                              legend.title = element_text(size = 22.5),
+                              legend.text = element_text(size = 20))
+chestPain_plot <- ggplot(data = chestPain, 
+                   aes(x = as.factor(chest_pain), y = proportion, 
+                       fill = as.factor(condition))) +
+  geom_bar(stat = 'identity', position = position_dodge()) + # create bar chart
+  theme_classic() + # white background, no gridlines
+  xlab('Type of Chest Pain') + # change x axis label
+  ylab('Proportion of Patients') + # change y axis label
+  chestPain_plot_theme + # change the size of axis titles, axis text,
+  # legend title and legend text
+  scale_x_discrete(labels = c('1', '2', '3', '4')) +
+  scale_y_continuous(breaks = c(seq(0, 0.35, 0.05)),
+                     labels = c(seq(0, 0.35, 0.05)),
+                     limits = c(0, 0.35)) +
+  # change x and y axis values
+  scale_fill_manual(name = 'Heart Disease Classification', 
+                    labels = c('Did Not Have Disease', 'Did Have Disease'),
+                    values = c('mediumspringgreen', 'firebrick2'))
+  # change legend title, text and fill colour for bars
+chestPain_plot
+```
+'chest_pain' ranges from 1-4. A value of '1' denotes typical angina, '2' denotes aytpical angina, '3' is non-anginal pain and '4' are asymptomatic (no symptoms). Typical angina meets all three of the following characteristics:
+
+https://www.textbookofcardiology.org/wiki/Chest_Pain_/_Angina_Pectoris
+
+- characteristic chest discomfort
+- provoked by exertion (such as exercise) or emotional stress
+- relieved by rest and/or nitroglycerine
+
+Atypical angina meets two of those characteristics and non-anginal pain is only one or none of the characteristics. The link also highlights that typical angina is the most common (as the name suggests) across men and women, followed by atypical and non-anginal pain. These results would contradict this, because you can see that of those who had heart disease (in red), non-anginal pain was more common than atypical and typical angina with asymptomatic being higher than the other three combined. In my opinion (again, not a medical professional), these results seem plausible because you only have to have one (or none) of the three characteristics to have non-anginal pain compared to all three for typical angina. It isn't unreasonable to assume that more people would have at least one characteristic compared with all three. Furthermore, the high prevalence of asymptomatic patients highlights that not having chest pain doesn't necessarily mean you don't have heart disease, because ~35% of patients in this study had no symptoms but did have heart disease.
+
+Perhaps what is even more surprising is that there was a higher proportion of patients who had chest pain but didn't have heart disease (coloured in green) than those who did have heart disease (in red). This may sound counter-intuitive, but again it highlights that chest pain doesn't necessarily mean you have heart disease.
+
+## Resting Blood Pressure Levels
+Now let's see if those that have heart disease have a different resting blood pressure than patients who didn't have heart disease.
+
+https://www.nhs.uk/common-health-questions/lifestyle/what-is-blood-pressure/
+
+Blood pressure is a measure of the force the heart produces to pump blood around the body. The link explains that there are normally two figures associated with blood pressure - the example they give is '140 over 90' or 140/90mmHg. The first number is systolic pressure which is the pressure produced when the heart pushes blood out and the second number is diastolic pressure which is the pressure when the heart is at rest between beats. I believe that the number in this dataset is the systolic pressure. It ranges from 94-200 in this dataset, with the link saying ideal blood pressure is 90/60mmHg to 120/80mmHG with high blood pressure being 140/90mmHg or above. Therefore it makes sense to me that this dataset refers to the first number, the systolic pressure.
+
+'resting_bp' is the resting (systolic) blood pressure measured in mmHg (millmetres of mercury) on admission to the hospital. 
+````{r resting blood pressure plot, fig.width = 20, fig.height = 15}
+restBP_plot_theme <- theme(axis.title = element_text(size = 22.5),
+                           axis.text = element_text(size = 20),
+                           legend.position = 'none')
+restBP_plot <- ggplot(data = hd_data, 
+                   aes(x = as.factor(condition), y = resting_bp, 
+                       fill = as.factor(condition))) +
+  geom_boxplot() + # create boxplot
+  geom_hline(yintercept = mean(hd_data$resting_bp),
+             linetype = 2, col = 'black', lwd = 2) + # add line denoting
+  # mean resting blood pressure for whole group
+  theme_classic() + # white background, no gridlines
+  xlab('Heart Disease Classification') + # change x axis label
+  ylab('Resting Blood Pressure (mmHG)') + # change y axis label
+  restBP_plot_theme + # change the size of axis titles and axis text,
+  # remove legend
+  scale_x_discrete(labels = c('Did Not Have Disease', 'Did Have Disease')) +
+  scale_y_continuous(breaks = c(seq(90, 205, 5)),
+                     labels = c(seq(90, 205, 5)),
+                     limits = c(90, 205)) +
+  # change x and y axis values
+  scale_fill_manual(values = c('mediumspringgreen', 'firebrick2'))
+  # change fill colour for boxes
+restBP_plot
+```
+You can see here that the boxplots for those that had the disease (in green) and those that did not have the disease (in red) are virtually identical. The black dashed line denotes the mean resting blood pressure for the entire dataset, at 132 mmHg. It is interesting to note that most of the patients are above the cut-off for a normal blood pressure (120). Based on this plot, you would not expect 'resting_bp' to be a good predictor of heart disease because there are no discernible differences in resting blood pressure between the two groups.
+
+## Cholesterol Levels
+Cholesterol is a type of lipid https://en.wikipedia.org/wiki/Cholesterol
+Lipids are macrobiomolecules, or large molecules essential to biological processes https://en.wikipedia.org/wiki/Biomolecule
+Fat is sometimes used interchangably with lipid, https://en.wikipedia.org/wiki/Lipid
+but fats are a subgroup of lipids called triglycerides which are the main components of human body fat https://en.wikipedia.org/wiki/Triglyceride
+
+'cholesterol' is the total amount of (serum) cholesterol present in a patient's blood measured in mg/dL.
+````{r cholesterol plot, fig.width = 20, fig.height = 15}
+chol_plot_theme <- theme(axis.title = element_text(size = 22.5),
+                         axis.text = element_text(size = 20),
+                         legend.position = 'none')
+chol_plot <- ggplot(data = hd_data,
+                    aes(x = as.factor(condition), y = cholesterol, 
+                        fill = as.factor(condition))) +
+  geom_boxplot() + # create boxplot
+  geom_hline(yintercept = mean(hd_data$cholesterol),
+             linetype = 2, col = 'black', lwd = 2) + # add line denoting
+  # mean cholesterol for whole group
+  theme_classic() + # white background, no gridlines
+  xlab('Heart Disease Classification') + # change x axis label
+  ylab('Cholesterol Level (mg/dL)') + # change y axis label
+  chol_plot_theme + # change the size of axis titles and axis text,
+  # remove legend
+  scale_x_discrete(labels = c('Did Not Have Disease', 'Did Have Disease')) +
+  scale_y_continuous(breaks = c(seq(125, 575, 25)),
+                     labels = c(seq(125, 575, 25)),
+                     limits = c(125, 575)) +
+  # change x and y axis values
+  scale_fill_manual(values = c('mediumspringgreen', 'firebrick2'))
+  # change fill colour for boxes
+chol_plot
+```
+https://www.heartuk.org.uk/cholesterol/getting-a-cholesterol-test
+
+The link says that an ideal cholesterol level is below 193 mg/dL.
+This link is from a UK organisation so the ideal level might not be the same for Americans, but even so the American cholesterol levels are generally higher than the ideal UK level.
+
+As for the difference between the two groups, there isn't much difference. The black dashed line denoted the mean cholesterol level for the entire dataset, at 247 mg/dL. The median cholesterol level for those that did have heart disease (red) appears higher than the average (black dashed line) and the median for those that didn't have it (green), but there is no significant difference between the two groups. As with 'resting_bp', 'cholesterol' is unlikely to be a useful predictor of heart disease.
+
+## Fasting Blood Sugar Levels
+The blood sugar level is a measure of the concentration of glucose in the blood. During fasting, blood glucose levels remain relatively constant because the body starts to used glycogen instead which is stored in the skeletal muscle and liver cells
+
+'fasting_blood_sugar' is a binary variable, with a '1' if the patient's blood sugar level is greater than 120 mg/dL and a '0' if the blood sugar level is less than 120 mg/dL.
+The blood sugar level should normally be between 70-99 mg/dL https://www.diabetesselfmanagement.com/blog/what-is-a-normal-blood-sugar-level/
+with the American Diabetes Association guidelines stating this range is 80-130 mg/dL for someone with diabetes https://www.diabetes.org/diabetes/medication-management/blood-glucose-testing-and-control/checking-your-blood-glucose
+Therefore, any patient with a '1' has a high blood sugar level, whether they are diabetic or not.
+````{r fasting blood sugar plot, fig.width = 20, fig.height = 15}
+# collate the number of confirmed positive and negative cases of heart disease 
+# for each level, and calculate the proportion of pos/neg cases for each
+fastBS <- hd_data %>% # using hd_data
+  group_by(fasting_blood_sugar, condition) %>% # group all the data from the
+  # same fasting_blood_sugar level and whether the patient had the 
+  # condition or not
+  summarise(disease = length(condition),
+            proportion = disease / length(hd_data$condition))
+  # sum the number of pos/neg cases for each level, then calculate the 
+  # proportion
+
+fastBS_plot_theme <- theme(axis.title = element_text(size = 22.5),
+                           axis.text = element_text(size = 20),
+                           legend.title = element_text(size = 22.5),
+                           legend.text = element_text(size = 20))
+fastBS_plot <- ggplot(data = fastBS, 
+                      aes(x = as.factor(fasting_blood_sugar), y = proportion,
+                          fill = as.factor(condition))) +
+  geom_bar(stat = 'identity', position = position_dodge()) + # create bar chart
+  theme_classic() + # white background, no gridlines
+  xlab('Fasting Blood Sugar') + # change x axis label
+  ylab('Proportion of Patients') + # change y axis label
+  fastBS_plot_theme + # change the size of axis titles, axis text,
+  # legend title and legend text
+  scale_y_continuous(breaks = c(seq(0, 0.5, 0.05)),
+                     labels = c(seq(0, 0.5, 0.05)),
+                     limits = c(0, 0.5)) +
+  # change y axis values
+  scale_fill_manual(name = 'Heart Disease Classification', 
+                    labels = c('Did Not Have Disease', 'Did Have Disease'),
+                    values = c('mediumspringgreen', 'firebrick2'))
+  # change legend title, text and fill colour for bars
+fastBS_plot
+```
+This plot shows that there was a higher proportion of patients who had a blood sugar level of less than 120 mg/dL ('0', left two bars) than those whose levels were above 120 mg/dL ('1', right two bars) in this dataset.
+Similarly to the previous two plots, I don't think 'fasting_blood_sugar' will be a good predictor of heart disease because the proportions of those who had heart disease and those who did not are very similar across the two resting blood sugar groups
+
+## Resting Electrocardiographic Results
+'resting_ecg' describes the patient's electrocardiographic (ECG) results when they are at rest. A value of '0' denotes normal results. A value of '1' denotes the patient having ST-T wave abnormality, which can be T wave inversions and/or ST elevation or a depression of greater than 0.05mV. A value of '2' means the patient shows probable or definite left ventricular hypertrophy, by Estes' criteria.
+
+Show image:
+<img src = '~/OneDrive - Swansea University/Other/Projects/R/Heart Disease/Schematic-representations-of-ECG-patterns-Normal-ECG-pattern-with-normal-P-wave-QRS.png'>
+Pleister, A., H. Selemon, S. Elton, & T. Elton, 2013. Circulating miRNAs: Novel biomarkers of acute coronary syndrome? Biomarkers in Medicine 7: 287-305.
+
+The top ECG shows a normal ST segment. Below, you can see that the ST segement is elevated compared to normal hence the name ST elevation. Below that, the ST segment is much deeper than normal, called an ST depression. Finally, a T inversion is the inverse of the normal bell-shaped T wave.
+
+https://geekymedics.com/how-to-read-an-ecg/
+step 7
+
+An ST elevation is most commonly caused by acute full-thickness myocardial infarction, also known as a heart attack. 
+https://en.wikipedia.org/wiki/Myocardial_infarction
+A heart attack occurs when blood flow decreases or stops completely to a part of the heart, damaging the heart muscle. Heart disease can cause heart attacks.
+
+An ST depression indicates myocardial ischaemia 
+https://www.mayoclinic.org/diseases-conditions/myocardial-ischemia/symptoms-causes/syc-20375417
+which is a reduction in blood flow to the heart which prevents the heart muscle from receiving enough oxygen, with this reduction arising from heart disease.
+
+A T wave inversion can be indicative of several conditions (see geekymedics link).
+
+Essentially all three are linked with heart disease.
+
+Left ventricular hypertrophy 
+https://www.mayoclinic.org/diseases-conditions/left-ventricular-hypertrophy/symptoms-causes/syc-20374314
+is an enlargement and thickening (hypertrophy) of the walls of the hearts main pumping chamber (the left ventricle). This can develop as a response to something else, such as high blood pressure causing the left ventricle to be worked harder. Having left ventricular hypertrophy can put you at a higher risk of a heart attack.
+````{r ECG plot, fig.width = 20, fig.height = 15}
+# collate the number of confirmed positive and negative cases of heart disease 
+# for ECG result, and calculate the proportion of pos/neg cases for each
+restECG <- hd_data %>% # using hd_data
+  group_by(resting_ecg, condition) %>% # group all the data from the    
+  # same ECG result and whether the patient had the condition or not
+  summarise(disease = length(condition),
+            proportion = disease / length(hd_data$condition))
+  # sum the number of pos/neg cases for each level, then calculate the 
+  # proportion
+
+restECG_plot_theme <- theme(axis.title = element_text(size = 22.5),
+                            axis.text = element_text(size = 20),
+                            legend.title = element_text(size = 22.5),
+                            legend.text = element_text(size = 20))
+restECG_plot <- ggplot(data = restECG,
+                       aes(x = as.factor(resting_ecg), y = proportion, 
+                           fill = as.factor(condition))) +
+  geom_bar(stat = 'identity', position = position_dodge()) + # create bar chart
+  theme_classic() + # white background, no gridlines
+  xlab('Resting ECG Results') + # change x axis label
+  ylab('Proportion of Patients') + # change y axis label
+  restECG_plot_theme + # change the size of axis titles, axis text,
+  # legend title and legend text
+  scale_y_continuous(breaks = c(seq(0, 0.35, 0.05)),
+                     labels = c(seq(0, 0.35, 0.05)),
+                     limits = c(0, 0.35)) +
+  # change y axis values
+  scale_fill_manual(name = 'Heart Disease Classification', 
+                    labels = c('Did Not Have Disease', 'Did Have Disease'),
+                    values = c('mediumspringgreen', 'firebrick2'))
+  # change legend title, text and fill colour for bars
+restECG_plot
+```
+Here we can see that many patients had normal ECG results ('0', left two bars). A higher proportion of patients did not have heart disease (green) than those who did (red), which makes sense.
+A very small proportion of patients showed ST-T wave abnormality ('1', middle two bars) and there was little difference between the two groups though there was a slightly higher proportion of those that did have heart disease.
+Many patients exhibited probable or definite left ventricular hypertrophy by Estes' criteria ('2', right two bars). Here a higher proportion of heart disease suffers had this result than non-suffers.
+Overall, 'resting_ecg' might show some predictive power, because non-suffers are more likely to have normal results and sufferers are more likely to have abnormal results (value '1' or '2').
+
+## Maximum Heart Rate During a Thallium Test
+A thallium test is performed while exercising. 
+https://www.nhsggc.org.uk/your-health/health-services/hsd-patient-carers/heart-disease/tests-for-heart-disease/thallium-scan/
+The rationale behind a thallium test is covered later in section ???.
+
+'max_heart_rate' is the maximum heart rate achieved during a thallium scan, while the patient is exercising. 
+````{r max HR plot, fig.width = 20, fig.height = 15}
+maxHR_plot_theme <- theme(axis.title = element_text(size = 22.5),
+                          axis.text = element_text(size = 20),
+                          legend.position = 'none')
+maxHR_plot <- ggplot(data = hd_data,
+                     aes(x = as.factor(condition), y = max_heart_rate,
+                         fill = as.factor(condition))) +
+  geom_boxplot() + # create boxplot
+  geom_hline(yintercept = mean(hd_data$max_heart_rate),
+             linetype = 2, col = 'black', lwd = 2) + # add line denoting
+  # mean heart rate for whole group
+  theme_classic() + # white background, no gridlines
+  xlab('Heart Disease Classification') + # change x axis label
+  ylab('Maximum Heart Rate (bpm)') + # change y axis label
+  maxHR_plot_theme + # change the size of axis titles and axis text,
+  # remove legend
+  scale_x_discrete(labels = c('Did Not Have Disease', 'Did Have Disease')) +
+  scale_y_continuous(breaks = c(seq(70, 210, 10)),
+                     labels = c(seq(70, 210, 10)),
+                     limits = c(70, 210)) +
+  # change x and y axis values
+  scale_fill_manual(values = c('mediumspringgreen', 'firebrick2'))
+  # change fill colour for boxes
+maxHR_plot
+```
+This plot is interesting because it also goes against what you might intuitively believe. Those that did not have heart disease (green) had significantly different maximum heart rates achieved during exercise during the thallium test. You might expect the reverse to be true - i.e. those with worse hearts (red) should have higher maximum heart rates because their heart has to work more on average than someone who has a healthy heart.
+However, without knowing the details of the test I can't make any good conclusions from this plot. For example, I don't know how intensely the patients were instructed to exercise and even if all patients were told to exercise at a certain level, perhaps the green group were more likely to exercise more intensely than the red group which would be reflected in their higher heart rates. There are a couple of variables in the original dataset (link) which might support the theory that patients had different exercise intensities - variable 28, 'proto' describes the exercise protocol a patient followed and variable 29, 'thaldur' denotes the duration of the exercise test in minutes. It is likely that both of these variables could have affected the maximum heart rate achieved in the thallium test.
+As for predictive power, 'max_heart_rate' will probably have some use due to the significant difference in heart rates between the two groups.
+
+## Exercise Induced Angina
+'exercise_induced_angina' (EIA) is a binary variable denoting if a patient has EIA ('1') or not ('0'). Angina was previously explained in section ??.
+````{r exercise induced angina plot, fig.width = 20, fig.height = 15}
+# collate the number of confirmed positive and negative cases of heart disease 
+# for those that have and don't have heart disease, and calculate the proportion
+# of pos/neg cases for each
+ex_ind_ang <- hd_data %>% # using hd_data
+  group_by(exercise_induced_angina, condition) %>% # group all the data from the
+  # same level and whether the patient had the condition or not
+  summarise(disease = length(condition),
+            proportion = disease / length(hd_data$condition))
+  # sum the number of pos/neg cases for each level, then calculate the 
+  # proportion
+
+ex_ind_ang_plot_theme <- theme(axis.title = element_text(size = 22.5),
+                               axis.text = element_text(size = 20),
+                               legend.title = element_text(size = 22.5),
+                               legend.text = element_text(size = 20))
+ex_ind_ang_plot <- ggplot(data = ex_ind_ang,
+                          aes(x = as.factor(exercise_induced_angina),
+                              y = proportion, fill = as.factor(condition))) +
+  geom_bar(stat = 'identity', position = position_dodge()) + # create bar chart
+  theme_classic() + # white background, no gridlines
+  xlab('EIA Classification') + # change x axis label
+  ylab('Proportion of Patients') + # change y axis label
+  ex_ind_ang_plot_theme + # change the size of axis titles, axis text,
+  # legend title and legend text
+  scale_y_continuous(breaks = c(seq(0, 0.5, 0.05)),
+                     labels = c(seq(0, 0.5, 0.05)),
+                     limits = c(0, 0.5)) +
+  # change y axis values
+  scale_fill_manual(name = 'Heart Disease Classification', 
+                    labels = c('Did Not Have Disease', 'Did Have Disease'),
+                    values = c('mediumspringgreen', 'firebrick2'))
+  # change legend title, text and fill colour for bars
+ex_ind_ang_plot
+```
+This plot shows a clear difference between the two groups. There is a much higher proportion of patients that have heart disease (red) that have EIA ('1'), whereas almost all patients who didn't have heart disease (green) don't have EIA ('0').
+However, the proportion of patients who have heart disease and have EIA is similar to the proportion who have heart disease and don't have EIA.
+Therefore, 'exercise_induced_angina' should be a useful predictor because it is much more likely that non-sufferers will not have EIA than having it, but it is almost equally likely a heart disease suffer will have or not have EIA.
+
+## ST Depression
+'st_depression' measures the length of the depression of the ST segment, if the patient had a value of '1' for 'resting_ecg' as explained in section ??. This depression is induced by exercise and is measured relative the patient at rest.
+````{r ST depression plot, fig.width = 20, fig.height = 15}
+STdepress_all_plot_theme <- theme(axis.title = element_text(size = 22.5),
+                                  axis.text = element_text(size = 20),
+                                  title = element_text(size = 20),
+                                  legend.position = 'none')
+STdepress_all_plot <- ggplot(data = hd_data,
+                             aes(x = as.factor(condition), y = st_depression,
+                                 fill = as.factor(condition))) +
+  geom_boxplot() + # create boxplot
+  geom_hline(yintercept = mean(hd_data$st_depression),
+             linetype = 2, col = 'black', lwd = 2) + # add line denoting
+  # mean heart rate for whole group
+  theme_classic() + # white background, no gridlines
+  xlab('Heart Disease Classification') + # change x axis label
+  ylab('ST Depression (mV)') + # change y axis label
+  ggtitle('All Patients') + # add title
+  annotate('text', x = 1, y = -0.1, label = '160 Patients', size = 10) +
+  annotate('text', x = 2, y = -0.1, label = '137 Patients', size = 10) + 
+  # add text denoting the number of patients per boxplot
+  STdepress_all_plot_theme + # change the size of title, axis titles and axis
+  # text, remove legend
+  scale_x_discrete(labels = c('Did Not Have Disease', 'Did Have Disease')) +
+  scale_y_continuous(breaks = c(seq(0, 6.5, 0.5)),
+                     labels = c(seq(0, 6.5, 0.5)),
+                     limits = c(-0.1, 6.5)) +
+  # change x and y axis values
+  scale_fill_manual(values = c('mediumspringgreen', 'firebrick2'))
+  # change fill colour for boxes
+
+# subset data to show only those who have ST depression
+STdepress_subset <- subset(hd_data, subset = st_depression > 0)
+  
+STdepress_plot_theme <- theme(axis.title = element_text(size = 22.5),
+                              axis.text = element_text(size = 20),
+                              title = element_text(size = 20),
+                              legend.position = 'none')
+STdepress_plot <- ggplot(data = STdepress_subset, 
+                         aes(x = as.factor(condition), y = st_depression,
+                             fill = as.factor(condition))) +
+  geom_boxplot() + # create boxplot
+  geom_hline(yintercept = mean(STdepress_subset$st_depression),
+             linetype = 2, col = 'black', lwd = 2) + # add line denoting
+  # mean heart rate for whole group
+  theme_classic() + # white background, no gridlines
+  xlab('Heart Disease Classification') + # change x axis label
+  ylab('ST Depression (mV)') + # change y axis label
+  ggtitle('Patients With ST Depression (> 0)') + # add title
+  annotate('text', x = 1, y = -0.1, label = '90 Patients', size = 10) +
+  annotate('text', x = 2, y = -0.1, label = '111 Patients', size = 10) + 
+  # add text denoting the number of patients per boxplot
+  STdepress_plot_theme + # change the size of title, axis titles and axis
+  # text, remove legend
+  scale_x_discrete(labels = c('Did Not Have Disease', 'Did Have Disease')) +
+  scale_y_continuous(breaks = c(seq(0, 6.5, 0.5)),
+                     labels = c(seq(0, 6.5, 0.5)),
+                     limits = c(-0.1, 6.5)) +
+  # change x and y axis values
+  scale_fill_manual(values = c('mediumspringgreen', 'firebrick2'))
+  # change fill colour for boxes
+
+# plot both plots
+grid.arrange(STdepress_all_plot, STdepress_plot, ncol = 2, nrow = 1)
+```
+This plot shows that of the 160 patients who didn't have heart disease (green, left side), 90 had ST depression. Compare this with those who have heart disease (red) and only 26 of those patients did not have ST depression. Therefore, it much more likely that a heart disease sufferer would have ST depression compared with a non-sufferer.
+The dashed black line shows the mean ST depression, with sufferers having a median value above the mean and non-sufferers below.
+Furthermore, heart disease sufferers have significantly higher ST depression than non-sufferers (right hand graph) which might suggest that 'st_depression' will be a good predictor for heart disease because those that have heart disease are more likely to have the presence of and a greater value of ST depression.
+
+## Slope of ST segment
+I covered the ST segment in the ECG results in section ??. 'st_peak_slope' is concerned with the slope of the ST segment during peak exercise. If a patient has a value of '1', their ST segments slopes upwards. If the value is '2' the segment is flat and if it's '3' the segment slopes downwards.
+````{r ST slope plot, fig.width = 20, fig.height = 15}
+# collate the number of confirmed positive and negative cases of heart disease 
+# for each ST slope, and calculate the proportion of pos/neg cases for each slope
+STslope_subset <- hd_data %>% # using hd_data
+  group_by(st_peak_slope, condition) %>% # group all the data from the
+  # same slope and whether the patient had the condition or not
+  summarise(disease = length(condition),
+            proportion = disease / length(hd_data$condition))
+  # sum the number of pos/neg cases for each slope, then calculate the 
+  # proportion
+
+STslope_plot_theme <- theme(axis.title = element_text(size = 22.5),
+                            axis.text = element_text(size = 20),
+                            legend.title = element_text(size = 22.5),
+                            legend.text = element_text(size = 20))
+STslope_plot <- ggplot(data = STslope_subset,
+                       aes(x = as.factor(st_peak_slope), y = proportion, 
+                           fill = as.factor(condition))) +
+  geom_bar(stat = 'identity', position = position_dodge()) + # create bar chart
+  theme_classic() + # white background, no gridlines
+  xlab('ST Slope (During Peak Exercise)') + # change x axis label
+  ylab('Proportion of Patients') + # change y axis label
+  STslope_plot_theme + # change the size of axis titles, axis text,
+  # legend title and legend text
+  scale_x_discrete(labels = c('1', '2', '3')) +
+  scale_y_continuous(breaks = c(seq(0, 0.4, 0.05)),
+                     labels = c(seq(0, 0.4, 0.05)),
+                     limits = c(0, 0.4)) +
+  # change x and y axis values
+  scale_fill_manual(name = 'Heart Disease Classification', 
+                    labels = c('Did Not Have Disease', 'Did Have Disease'),
+                    values = c('mediumspringgreen', 'firebrick2'))
+  # change legend title, text and fill colour for bars
+STslope_plot
+```
+Normally, the ST segment should be flat ('1')
+https://litfl.com/st-segment-ecg-library/
+It is therefore interesting to note that the highest proportion of patients with heart disease (red) had a flat ST segment.
+
+Most of the sources I looked at referred to slope changes during ST depression, but I'm not 100% sure that this variable refers to the slope of the ST segment during ST depression, primarily because in the previous section and section ?? we saw that not every patient experienced ST depression. However, what I can say is that having either an upwards or a downwards ST segment slope is abnormal.
+
+I'm not sure what the effectiveness of 'st_peak_slope' will be, because a low proportion of both groups have a value of '3' and there isn't much difference between those proportions. So if a patient has a '3' it isn't obvious if they will have heart disease or not. If they have a '1' they will probably not have it and if they have a '2' they probably will have it.
+
+## Major Vessles Coloured by Fluoroscopy 
+'no_major_vessels' is the number of major vessels (0-3) coloured by fluoroscopy.
+I think that an angiogram is the most likely type of fluoroscopy being carried out here, because an angiogram is used to examine blood vessels. 
+https://www.nhsinform.scot/tests-and-treatments/scans-and-x-rays/angiography
+During an angiogram a catheter is inserted into a blood vessel(/s). A dye is injected which shows up on an X-ray. I think that ideally you want to see three vessels because that would mean none are blocked. Let's see how the patients performed:
+````{r vessels plot, fig.width = 20, fig.height = 15}
+# collate the number of confirmed positive and negative cases of heart disease 
+# for each number of vessels recorded, and calculate the proportion of pos/neg 
+# cases for each group
+vessels_subset <- hd_data %>% # using hd_data
+  group_by(no_major_vessels, condition) %>% # group all the data from the
+  # same group of number of vessels and whether the patient had the condition or   # not
+  summarise(disease = length(condition),
+            proportion = disease / length(hd_data$condition))
+  # sum the number of pos/neg cases for each group, then calculate the 
+  # proportion
+
+vessels_plot_theme <- theme(axis.title = element_text(size = 22.5),
+                            axis.text = element_text(size = 20),
+                            legend.title = element_text(size = 22.5),
+                            legend.text = element_text(size = 20))
+vessels_plot <- ggplot(data = vessels_subset,
+                       aes(x = as.factor(no_major_vessels), y = proportion, 
+                           fill = as.factor(condition))) +
+  geom_bar(stat = 'identity', position = position_dodge()) + # create bar chart
+  theme_classic() + # white background, no gridlines
+  xlab('Number of Major Vessels Observed During Fluoroscopy') + # change x axis 
+  # label
+  ylab('Proportion of Patients') + # change y axis label
+  vessels_plot_theme + # change the size of axis titles, axis text,
+  # legend title and legend text
+  scale_x_discrete(labels = c('0', '1', '2', '3')) +
+  scale_y_continuous(breaks = c(seq(0, 0.5, 0.05)),
+                     labels = c(seq(0, 0.5, 0.05)),
+                     limits = c(0, 0.5)) +
+  # change x and y axis values
+  scale_fill_manual(name = 'Heart Disease Classification', 
+                    labels = c('Did Not Have Disease', 'Did Have Disease'),
+                    values = c('mediumspringgreen', 'firebrick2'))
+  # change legend title, text and fill colour for bars
+vessels_plot
+```
+This plot once again goes against the theory behind it. By far the highest proportion of patients who didn't have heart disease (green) had no visible major vessels ('0'), where you would expect them to have at least 1. This (and other counter-intuitive results) may make more sense if you consider that all of these patients have presumably come to hospital with heart problems, so even if they don't have heart disease specifically it isn't unreasonable to assume their heart isn't perfectly healthy anyway.
+Conversely, the heart disease sufferers (red) are roughly equally split between all levels. 
+As for making predictions, 'no_major_vessels' is likely only going to be useful in determining a heart disease classification if no major vessels are seen ('0'), because then they most likely don't have heart disease.
+
+## Thallium Test
+The final predictor is the results from a thallium test. 'thallium' denotes the results from the patient's thallium test. A value of '0' means the results were normal, if there is a value of '1' there is a fixed defect and if there is a '2' there is a reversible defect. 
+
+https://www.nps.org.au/australian-prescriber/articles/thallium-scanning
+
+Thallium is injected during peak exercise and will be extracted by the hearts muscle tissue (myocardium). Ideally there will be a uniform (equal) distribution of thallium in all myocardial segments ('0'). If a patient has heart disease, myocardial uptake is reduced and there will be a defect, which may be fixed ('1') and the thallium will not redistribute normally after some time or it may be reversible and the thallium will distribute normally after its initial defect.
+````{r thallium plot, fig.width = 20, fig.height = 15}
+# collate the number of confirmed positive and negative cases of heart disease 
+# for each thallium test result, and calculate the proportion of pos/neg 
+# cases for each result
+thallium_subset <- hd_data %>% # using hd_data
+  group_by(thallium, condition) %>% # group all the data from the
+  # same thallium test result and whether the patient had the condition or not
+  summarise(disease = length(condition),
+            proportion = disease / length(hd_data$condition))
+  # sum the number of pos/neg cases for each result, then calculate the 
+  # proportion
+
+thallium_plot_theme <- theme(axis.title = element_text(size = 22.5),
+                             axis.text = element_text(size = 20),
+                             legend.title = element_text(size = 22.5),
+                             legend.text = element_text(size = 20))
+thallium_plot <- ggplot(data = thallium_subset,
+                        aes(x = as.factor(thallium), y = proportion, 
+                            fill = as.factor(condition))) +
+  geom_bar(stat = 'identity', position = position_dodge()) + # create bar chart
+  theme_classic() + # white background, no gridlines
+  xlab('Thallium Test Result') + # change x axis label
+  ylab('Proportion of Patients') + # change y axis label
+  thallium_plot_theme + # change the size of axis titles, axis text,
+  # legend title and legend text
+  scale_x_discrete(labels = c('0', '1', '2')) +
+  scale_y_continuous(breaks = c(seq(0, 0.5, 0.05)),
+                     labels = c(seq(0, 0.5, 0.05)),
+                     limits = c(0, 0.5)) +
+  # change x and y axis values
+  scale_fill_manual(name = 'Heart Disease Classification', 
+                    labels = c('Did Not Have Disease', 'Did Have Disease'),
+                    values = c('mediumspringgreen', 'firebrick2'))
+  # change legend title, text and fill colour for bars
+thallium_plot
+```
+This plot makes a bit more sense. If a patient doesn't have heart disease (green) they are far more likely to have normal thallium test results ('0') and those that have heart disease (red) are more likely to have abnormal results ('1' and '2') compared with non-sufferers.
+Therefore 'thallium' will probably have some use as a predictor.
+
+# Predictive Models
+There are a number of metrics to assess the quality of a classification model.
+Firstly, accuracy is the proportion of correctly predicted results relative to all cases. Consider this table, also known as a confusion matrix:
+
+Show image:
+<img src = '~/OneDrive - Swansea University/Other/Projects/R/Heart Disease/Screenshot 2020-07-15 at 14.55.46.png'>
+
+In this dataset, '0' is the 'positive' class because '0' means not having heart disease which is the positive outcome.
+A true positive (TP) is therefore a positive prediction made by a model ('0') where that patient is actually positive ('0').
+A true negative (TN) is the opposite, where a negative prediction made by a model ('1') is made for a patient that is actually negative ('1').
+A false positive (FP) is a positive prediction made by a model ('0') that is incorrect because the patient actually has heart disease ('1') - the positive prediction is false.
+A false negative (FN) is a negative prediction made by a model ('1') that is incorrect because the patient doesn't have heart disease ('0') - the negative prediction is false.
+
+Therefore, accuracy is the number of correctly predicted values (TP + TN) divided by all outcomes (TP + FP + FN + TN). This seems like a good metric on paper, but it isn't always useful. For example, in this dataset 137 of the total 297 patients have heart disease. Therefore, if I had a model that just predicted every patient would have heart disease I'd get an accuracy of 137/297 or 0.46. Aside from being worse than random guessing, this model would have massive implications in saying every patient had heart disease. Time, money and medication would be spent on patients when the didn't actually need it because the model incorrectly predicted their condition. Conversely, predicting that every will not have heart disease increases the accuracy (160/297 or 0.54) but this model is even worse because now nobody receives treatment.
+
+A better metric might be precision. Precision measures what proportion of predicted positives are actually positives ((TP) / (TP + FP)). Now we can't just say everybody will have heart disease because we'd get a lot of false positives and we can't say everyone will not have heart disease because then precision will equal 0, as we never predict a true positive.
+
+Another useful metric is sensitivity, also known as recall or the true positive rate (TPR) which measures what proportion of actual positives are correctly classified as positives ((TP) / (TP + FN)). As before, we can't predict everyone will have heart disease because this will capture all of the true positives and all of the false negatives (patients predicted to have heart disease but they actually don't), leading to a sensitivity of 1.
+
+The final metric is specificity, also known as selectivity or the true negative rate (TNR). This is the opposite of sensitivity as it measures what proportion of actual negatives are correctly classified as negatives ((TN) / (TN + FP)).
+
+Ideally you want to limit the number of false positives and false negatives. Therefore a prefect predictive model will have a sensitivity of 100% (i.e. all patients who have heart disease are correctly identified) and a specificity of 100% (i.e. all patients who don't have heart disease are correctly identified).
+Of course this is rarely possible in reality.
+
+For these models, they will be trained on 70% of the dataset and tested on the remaining 30%. This allows their metrics to be compared.
+```{r model setup, echo = TRUE}
+# create a matrix to track model stats
+model_stats = matrix(NA, 7, 4, 
+                     dimnames = list(c('Logistic Regression (All Variables)',
+                                       'Logistic Regression (Sig. Variables)',
+                                       'KNN', 'Single classification tree',
+                                       'Bagging', 'Random forest', 'Boosting'),
+                                     c('Accuracy', 'Precision', 'Sensitivity',
+                                       'Specificity')))
+
+# split data into training set (70%) and test set (30%)
+set.seed(35)
+train = slice_sample(hd_data, prop = 0.7)
+test = anti_join(hd_data, train)
+
+# make condition a factor
+train$condition = as.factor(train$condition)
+test$condition = as.factor(test$condition)
+```
+
+## Logistic Regression
+Logistic regression deals with qualitative responses. Instead of predicting continuous values for a particular observation as in linear regression, logistic regression predicts the probability of an observation belonging to a particular class.
+In this scenario, we would be looking at the probability of a patient having heart disease ('1') or not ('0'). Whereas linear regression might give negative probabilities, which aren't possible, a logistic regression using the logistic function would give all outputs between 0 and 1. Logistic regression produces an S-shaped curve. 
+Generally a logistic regression model is fit using maximum likelihood. In essence, this seeks to estimate regression coefficients that when plugged into the the model result in a number close to 1 for those patients who have heart disease and a number close to 0 for those who do not have heart disease. In my previous analysis (link), linear regression is fit using least squares which is a type of maximum likelihood.
+
+```{r logistic regression, echo = TRUE}
+# perform logistic regression on training data
+log_reg = glm(condition ~ ., data = train, family = binomial)
+summary(log_reg)
+```
+The summary of the output of the logistic regression model shows that not all predictors are helpful in predicting the response. Of those that are useful (denoted by asterisks, with a p-value of 0.05 or less), all but one are positive. This means that as a patients value of those predictors increases their chance of having heart disease increases, with the exception of 'fasting_blood_sugar'. In full:
+- sex: males ('1') more likely than females ('0') to have heart disease, as seen in section ??
+- chest_pain: patients with less severe chest pain (e.g. '4') are at the most risk of having heart disease, as seen in section ??
+- fasting_blood_sugar: patients with fasting blood sugar levels below 120 mg/dL ('0') have a higher probability of having heart disease than patients with levels above 120 mg/dL ('1'), as seen in section ??
+- exercise_induced_angina: patients with EIA ('1') more likely 
+to have heart disease than those without ('0'), as seen in section ??
+- no_major_vessels: patients with a higher number of visible major vessels (e.g. '3') are at the most risk of having heart disease, as seen in section ??
+- thallium: patients with reversible defects ('3') are at the most risk of having heart disease, as seen in section ??
+
+The insignificant predictors can be removed which may improve the performance, but I'll leave them in for now. Let's see how this model does on the unseen test data:
+```{r logistic regression test}
+# compute the probabilities of each test set observation having heart disease 
+log_reg_probs = predict(log_reg, test, type = 'response')
+
+# compute predictions for test set and compare them to the actual values
+# cut-off is 0.5, if the predicted probability is lower than 0.5 the patient is
+# predicted to not have heart disease, and vice versa
+condition_test = test$condition
+log_reg_pred = rep('0', 90)
+log_reg_pred[log_reg_probs > .5] = '1'
+
+# show confusion matrix
+table(log_reg_pred, condition_test)
+
+# turn confusion matrix to data frame
+log_reg_confMat_df = data.frame(log_reg_pred, condition_test)
+
+# subset log_reg_confMat_df to have the true positives
+log_reg_pred_TP <- subset(log_reg_confMat_df, 
+                          subset = log_reg_pred == 0 & condition_test == 0)
+# length of either column equals number of true positives
+log_reg_pred_TP <- length(log_reg_pred_TP$log_reg_pred)
+# repeat for true negatives, false positives and false negatives
+log_reg_pred_TN <- subset(log_reg_confMat_df, 
+                          subset = log_reg_pred == 1 & condition_test == 1)
+log_reg_pred_TN <- length(log_reg_pred_TN$log_reg_pred)
+log_reg_pred_FP <- subset(log_reg_confMat_df, 
+                          subset = log_reg_pred == 0 & condition_test == 1)
+log_reg_pred_FP <- length(log_reg_pred_FP$log_reg_pred)
+log_reg_pred_FN <- subset(log_reg_confMat_df, 
+                          subset = log_reg_pred == 1 & condition_test == 0)
+log_reg_pred_FN <- length(log_reg_pred_FN$log_reg_pred)
+
+
+cat('Model accuracy =', (log_reg_pred_TP + log_reg_pred_TN) / 90 * 100, '\n')
+cat('Model precision =', 
+    (log_reg_pred_TP / (log_reg_pred_TP + log_reg_pred_FP) * 100), '\n')
+cat('Model sensitivity =', 
+    (log_reg_pred_TP / (log_reg_pred_TP + log_reg_pred_FN) * 100), '\n')
+cat('Model specificity =', 
+    (log_reg_pred_TN / (log_reg_pred_TN + log_reg_pred_FP) * 100), '\n')
+```
+As a reminder, in this and all following confusion matrices, '0' is the 'positive' class because '0' means not having heart disease which is the positive outcome.
+So this logistic regression model with all predictors included has an accuracy of 87.8%, or to put it simply the model correctly predicted 87.8% of the test patients heart disease classification.
+The precision is 87.5%, so of all the patients that were predicted to have heart disease by the model, 87.5% actually had it.
+A sensitivity of 89.3% means that of all the patients who actually had heart disease, this model identified 89.3% of them.
+Conversely a specificity of 86% means that all the patients who actually did not have heart disease, this model identified 86% of them.
+So, this model performs fairly well but it is failing to identify around 10% of the true positive cases meaning around one in ten people would not be correctly diagnosed.
+
+We could see if the performance improves by removing the non-significant predictors because they don't have a significant relationship with the response. Therefore, I will run a logistic regression model again but only with 'sex', 'chest_pain', 'fasting_blood_sugar', 'exercise_induced_angina', 'no_major_vessels' and 'thallium'.
+```{r logistic regression (sig vars) test}
+# perform logistic regression on training data
+log_reg_signif = glm(condition ~ sex + chest_pain + fasting_blood_sugar +
+                       exercise_induced_angina + no_major_vessels + thallium, 
+                     data = train, family = binomial)
+#summary(log_reg_signif)
+
+# compute the probabilities of each test set observation having heart disease 
+log_reg_signif_probs = predict(log_reg_signif, test, type = 'response')
+
+# compute predictions for test set and compare them to the actual values
+# cut-off is 0.5, if the predicted probability is lower than 0.5 the patient is
+# predicted to not have heart disease, and vice versa
+condition_test = test$condition
+log_reg_signif_pred = rep('0', 90)
+log_reg_signif_pred[log_reg_signif_probs > .5] = '1'
+
+# show confusion matrix
+table(log_reg_signif_pred, condition_test)
+
+# turn confusion matrix to data frame
+log_reg_signif_confMat_df = data.frame(log_reg_signif_pred, condition_test)
+
+# subset log_reg_signif_confMat_df to have the true positives
+log_reg_signif_pred_TP <- subset(log_reg_signif_confMat_df, 
+                                 subset = log_reg_signif_pred == 0 &
+                                   condition_test == 0)
+# length of either column equals number of true positives
+log_reg_signif_pred_TP <- length(log_reg_signif_pred_TP$log_reg_signif_pred)
+# repeat for true negatives, false positives and false negatives
+log_reg_signif_pred_TN <- subset(log_reg_signif_confMat_df, 
+                                 subset = log_reg_signif_pred == 1 &
+                                   condition_test == 1)
+log_reg_signif_pred_TN <- length(log_reg_signif_pred_TN$log_reg_signif_pred)
+log_reg_signif_pred_FP <- subset(log_reg_signif_confMat_df, 
+                                 subset = log_reg_signif_pred == 0 & 
+                                   condition_test == 1)
+log_reg_signif_pred_FP <- length(log_reg_signif_pred_FP$log_reg_signif_pred)
+log_reg_signif_pred_FN <- subset(log_reg_signif_confMat_df, 
+                                 subset = log_reg_signif_pred == 1 &
+                                   condition_test == 0)
+log_reg_signif_pred_FN <- length(log_reg_signif_pred_FN$log_reg_signif_pred)
+
+
+cat('Model accuracy =', 
+    (log_reg_signif_pred_TP + log_reg_signif_pred_TN) / 90 * 100, '\n')
+cat('Model precision =', 
+    (log_reg_signif_pred_TP / (log_reg_signif_pred_TP + log_reg_signif_pred_FP) 
+     * 100), '\n')
+cat('Model sensitivity =', 
+    (log_reg_signif_pred_TP / (log_reg_signif_pred_TP + log_reg_signif_pred_FN) 
+     * 100), '\n')
+cat('Model specificity =', 
+    (log_reg_signif_pred_TN / (log_reg_signif_pred_TN + log_reg_signif_pred_FP) 
+     * 100), '\n')
+```
+Here we see that this model is actually worse across all metrics and was particularly much worse at identifying true positives. However, something else can be changed in the model which may improve the performance. In the previous two models, if a patient had a probability of 0.5 or above they were classified as having heart disease and if the probability was below 0.5 they were predicted to not have heart disease. This cut-off can be changed and performance might increase. As we saw in section ??, slightly more patients had heart disease than not and this imbalance might be increased further by the random subsetting to determine the training and testing sets. So, I will rerun both models, using a range of cut-offs from 0.05 to 0.95, varying by 0.05.
+Starting with the logistic regression model with all predictors:
+```{r log reg cut-off changes}
+# create a matrix to track model stats
+log_reg_stats = matrix(NA, 19, 4, 
+                       dimnames = list(as.character(seq(0.05, 0.95, 0.05)),
+                                       c('Accuracy', 'Precision', 'Sensitivity',
+                                         'Specificity')))
+
+# run a for loop over the different cut-off values
+for(i in seq(0.05, 0.95, 0.05)){
+  log_reg_pred_cutOff = rep('0', 90)
+  
+  # change cut-off
+  log_reg_pred_cutOff[log_reg_probs > i] = '1'
+
+  # turn confusion matrix to data frame
+  log_reg_confMat_df = data.frame(log_reg_pred_cutOff, condition_test)
+  
+  # subset log_reg_confMat_df to have the true positives
+  TP <- subset(log_reg_confMat_df,
+               subset = log_reg_pred_cutOff == 0 & condition_test == 0)
+  # length of either column equals number of true positives
+  TP <- length(TP$log_reg_pred_cutOff)
+  # repeat for true negatives, false positives and false negatives
+  TN <- subset(log_reg_confMat_df,
+               subset = log_reg_pred_cutOff == 1 & condition_test == 1)
+  TN <- length(TN$log_reg_pred_cutOff)
+  FP <- subset(log_reg_confMat_df,
+               subset = log_reg_pred_cutOff == 0 & condition_test == 1)
+  FP <- length(FP$log_reg_pred_cutOff)
+  FN <- subset(log_reg_confMat_df, 
+               subset = log_reg_pred_cutOff == 1 & condition_test == 0)
+  FN <- length(FN$log_reg_pred_cutOff)
+
+  # add metrics to matrix
+  log_reg_stats[as.character(i), 'Accuracy'] = (TP + TN) / 90 * 100
+  log_reg_stats[as.character(i), 'Precision'] = (TP / (TP + FP) * 100)
+  log_reg_stats[as.character(i), 'Sensitivity'] = TP / (TP + FN) * 100
+  log_reg_stats[as.character(i), 'Specificity'] = TN / (TN + FP) * 100
+} 
+log_reg_stats
+```
+So it is immediately apparent that there is a trade-off between precision, sensitivity and specificity. You can't increase sensitivity without a penalty to precision and specificity. The best trade-off is probably with a cut-off of 0.05, though you could argue that another cut-off is better if one metric is more important than the others. For example, it could be argued that it is more important to find true positives (patients who actually have heart disease) at the expense of some precision and specificity (some patients who don't have heart disease incorrectly classified).
+Next I'll see how the cut-off affects the logistic regression model with only the significant predictors:
+```{r log reg (sig vars) cut-off changes}
+# create a matrix to track model stats
+log_reg_signif_stats = matrix(NA, 19, 4, 
+                              dimnames = list(as.character(seq(0.05, 0.95, 0.05)),
+                                              c('Accuracy', 'Precision', 
+                                                'Sensitivity', 'Specificity')))
+
+# run a for loop over the different cut-off values
+for(i in seq(0.05, 0.95, 0.05)){
+  log_reg_pred_cutOff = rep('0', 90)
+  
+  # change cut-off
+  log_reg_pred_cutOff[log_reg_signif_probs > i] = '1'
+
+  # turn confusion matrix to data frame
+  log_reg_confMat_df = data.frame(log_reg_pred_cutOff, condition_test)
+  
+  # subset log_reg_confMat_df to have the true positives
+  TP <- subset(log_reg_confMat_df,
+               subset = log_reg_pred_cutOff == 0 & condition_test == 0)
+  # length of either column equals number of true positives
+  TP <- length(TP$log_reg_pred_cutOff)
+  # repeat for true negatives, false positives and false negatives
+  TN <- subset(log_reg_confMat_df,
+               subset = log_reg_pred_cutOff == 1 & condition_test == 1)
+  TN <- length(TN$log_reg_pred_cutOff)
+  FP <- subset(log_reg_confMat_df,
+               subset = log_reg_pred_cutOff == 0 & condition_test == 1)
+  FP <- length(FP$log_reg_pred_cutOff)
+  FN <- subset(log_reg_confMat_df, 
+               subset = log_reg_pred_cutOff == 1 & condition_test == 0)
+  FN <- length(FN$log_reg_pred_cutOff)
+
+  # add metrics to matrix
+  log_reg_signif_stats[as.character(i), 'Accuracy'] = (TP + TN) / 90 * 100
+  log_reg_signif_stats[as.character(i), 'Precision'] = (TP / (TP + FP) * 100)
+  log_reg_signif_stats[as.character(i), 'Sensitivity'] = TP / (TP + FN) * 100
+  log_reg_signif_stats[as.character(i), 'Specificity'] = TN / (TN + FP) * 100
+} 
+log_reg_signif_stats
+```
+The pattern is the same, but there is a marked difference in sensitivity when the cut-off falls below 0.5. At 0.45, the sensitivity is about slightly worse and there is a slight improvement in accuracy but there are large increase in specificity and precision. Now let's see how the two best logistic regression models compare:
+```{r log reg models compared}
+cat('Logistic regression with all predictors:\n') 
+log_reg_stats['0.5',]
+cat('Logistic regression with only significant predictors:\n') 
+log_reg_signif_stats['0.45',]
+```
+Both models are very similar. The model with all predictors has slightly sensitivity whereas the model with significant predictors has better accuracy, precision and specificity. I will add both models to the matrix:
+```{r add log reg models to matrix, echo = TRUE}
+model_stats['Logistic Regression (All Variables)',] = 
+  log_reg_stats['0.5',]
+model_stats['Logistic Regression (Sig. Variables)',] = 
+  log_reg_signif_stats['0.45',]
+
+```
+
+## K-Nearest Neighbours
+K-Nearest Neighbours (KNN) is a relatively simple but often very effective method. After being trained, a KNN model will take a test observation and look for the k-nearest neighbours to that observations, where k is equal to an odd number. Why specifically an odd number? It rules out the possibility of split decision and instead allows the majority to always be selected. For example, if k = 3, the three nearest points to the test observation will be found. If three or two of those neighbours belong to a particular class then the test observation will be predicted to belong to that class.
+First, the data is standardised because the difference in scales of variables affects the variation. For example, let's compare the difference in variation between 'age' and 'sex':
+```{r compare variance, echo = TRUE}
+# age is first variable
+var(hd_data[,1])
+# sex is second variable
+var(hd_data[,2])
+```
+The variation of 'age' is much higher than 'sex' because sex is a binary variable. By standardising all variables, they will all have a mean of zero and a standard deviation of one and therefore equal variance.
+I'll check this just be to sure:
+```{r standardise, echo = TRUE}
+standardised.X = scale(hd_data[, -14]) # condition removed because that is the
+# target variables
+
+# check variances
+for(i in 1:13){
+  cat('Variance of predictor', i, '-', var(standardised.X[, i]), '\n')
+}
+```
+Now every variable has the same variance. Let's see how KNN performs with k = 1:
+```{r knn, echo = TRUE}
+# knn() takes 4 inputs: a matrix containing predictors associated with the
+# training data, a matrix containing predictors associated with the data for
+# which we wish to make predictions, a vector containing the class labels for
+# the training observations and a value for K
+train.X = scale(train[, -14])
+test.X = scale(test[, -14])
+condition_train = train$condition
+# condition_test already created
+
+# set a random seed to ensure reproducibility of results
+set.seed(35)
+knn_pred = knn(train.X, test.X, condition_train, k = 1)
+
+# show confusion matrix
+table(knn_pred, condition_test)
+
+# turn confusion matrix to data frame
+knn_confMat_df = data.frame(knn_pred, condition_test)
+
+# subset knn_confMat_df to have the true positives
+knn_pred_TP <- subset(knn_confMat_df, 
+                      subset = knn_pred == 0 & condition_test == 0)
+# length of either column equals number of true positives
+knn_pred_TP <- length(knn_pred_TP$knn_pred)
+# repeat for true negatives, false positives and false negatives
+knn_pred_TN <- subset(knn_confMat_df, 
+                      subset = knn_pred == 1 & condition_test == 1)
+knn_pred_TN <- length(knn_pred_TN$knn_pred)
+knn_pred_FP <- subset(knn_confMat_df,
+                      subset = knn_pred == 0 & condition_test == 1)
+knn_pred_FP <- length(knn_pred_FP$knn_pred)
+knn_pred_FN <- subset(knn_confMat_df,
+                      subset = knn_pred == 1 & condition_test == 0)
+knn_pred_FN <- length(knn_pred_FN$knn_pred)
+
+
+cat('Model accuracy =', (knn_pred_TP + knn_pred_TN ) / 90 * 100, '\n')
+cat('Model precision =', (knn_pred_TP / (knn_pred_TP + knn_pred_FP) * 100),
+    '\n')
+cat('Model sensitivity =', (knn_pred_TP / (knn_pred_TP + knn_pred_FN) * 100),
+    '\n')
+cat('Model specificity =', (knn_pred_TN / (knn_pred_TN + knn_pred_FP) * 100),
+    '\n')
+```
+Well this model isn't brilliant but we can vary the value of k and see what the best model is. I will perform KNN with every odd value from 1-99 and display the best 10 results by accuracy:
+```{r different k values}
+# create a matrix to track model stats
+knn_stats = matrix(NA, 50, 4,
+                   dimnames = list(as.character(seq(1, 100, 2)),
+                                   c('Accuracy', 'Precision', 'Sensitivity',
+                                     'Specificity')))
+
+# run a for loop over the different k values
+for(i in seq(1, 100, 2)){
+  set.seed(35)
+  knn_pred = knn(train.X, test.X, condition_train, k = i)
+
+  # turn confusion matrix to data frame
+  knn_confMat_df = data.frame(knn_pred, condition_test)
+  
+  # subset knn_confMat_df to have the true positives
+  TP <- subset(knn_confMat_df,
+               subset = knn_pred == 0 & condition_test == 0)
+  # length of either column equals number of true positives
+  TP <- length(TP$knn_pred)
+  # repeat for true negatives, false positives and false negatives
+  TN <- subset(knn_confMat_df,
+               subset = knn_pred == 1 & condition_test == 1)
+  TN <- length(TN$knn_pred)
+  FP <- subset(knn_confMat_df,
+               subset = knn_pred == 0 & condition_test == 1)
+  FP <- length(FP$knn_pred)
+  FN <- subset(knn_confMat_df, 
+               subset = knn_pred == 1 & condition_test == 0)
+  FN <- length(FN$knn_pred)
+
+  # add metrics to matrix
+  knn_stats[as.character(i), 'Accuracy'] = (TP + TN) / 90 * 100
+  knn_stats[as.character(i), 'Precision'] = (TP / (TP + FP) * 100)
+  knn_stats[as.character(i), 'Sensitivity'] = TP / (TP + FN) * 100
+  knn_stats[as.character(i), 'Specificity'] = TN / (TN + FP) * 100
+}
+
+# order the matrix by the first column (accuracy), from high to low
+knn_stats = knn_stats[order(knn_stats[, 1], decreasing = T),]
+# show top 10 models
+head(knn_stats, 10)
+```
+We can see that KNN produces some impressive numbers the highest accuracy and sensitivity seen so far. However, the precision and specificity is slightly worse than the logistic regression model with only significant predictors but is equal to or better than the model with all predictors.
+Therefore, KNN with k = 21 is better than or equal to logistic regression across all metrics. I will add the best KNN model to the matrix.
+```{r add knn to matrix, echo = TRUE}
+model_stats['KNN',] = knn_stats['21',]
+```
+
+## Tree-Based Approaches
+As I have already covered these tree-based approaches in my previous analysis (link), so I won't repeat myself here and go into depth about these models.
+
+### Classification Tree
+First I'll see how a single classification tree performs:
+```{r single tree, echo = TRUE}
+tree_hd = rpart(condition ~ ., train, cp = -1) 
+# cp = -1 builds the most complex tree
+rpart.plot(tree_hd, digits = 4, type = 5, 
+           box.palette = c('mediumspringgreen', 'firebrick2'))
+#rpart.rules(tree_hd, extra = 4)
+```
+In the terminal nodes (coloured boxes), top number is the prediction made by the model for heart disease, recall that '0' is not having heart disease and '1' is having heart disease. The middle number is the probability that a patient in that node has heart disease. The bottom number is the percentage of (training) observations in that node. So, for example, if a patient has a 'thallium' value of '0', a 'max_heart_rate' of 160, their 'age' is 50 and they have a 'resting_bp' of 120, they will be placed in the leftmost box. They will be predicted to not have heart disease and their probability of having heart disease is 0. In the training set, 23.19% of patients belong in this terminal node.
+Now I'll see how this tree performs on the test data:
+```{r single tree test}
+tree_preds = predict(tree_hd, newdata = test)
+
+# cut-off is 0.5
+tree_preds[tree_preds < .5] = '0'
+tree_preds[tree_preds > .5] = '1'
+# tree_preds has two columns, '0' and '1'
+# create new column with a '0' if there was a '1' in the '0' column previously,
+# and vice versa
+# this means if there was a '1' in the '0' column the model was predicting '0'
+# for that patient, and this column reflects the predictions made
+tree_preds = ifelse(tree_preds[, '0'] == '1', '0', '1')
+
+# show confusion matrix
+table(tree_preds, condition_test)
+
+# turn confusion matrix to data frame
+tree_confMat_df = data.frame(tree_preds, condition_test)
+
+# subset tree_confMat_df to have the true positives
+tree_pred_TP <- subset(tree_confMat_df, 
+                       subset = tree_preds == 0 & condition_test == 0)
+# length of either column equals number of true positives
+tree_pred_TP <- length(tree_pred_TP$tree_preds)
+# repeat for true negatives, false positives and false negatives
+tree_pred_TN <- subset(tree_confMat_df, 
+                       subset = tree_preds == 1 & condition_test == 1)
+tree_pred_TN <- length(tree_pred_TN$tree_preds)
+tree_pred_FP <- subset(tree_confMat_df,
+                       subset = tree_preds == 0 & condition_test == 1)
+tree_pred_FP <- length(tree_pred_FP$tree_preds)
+tree_pred_FN <- subset(tree_confMat_df,
+                       subset = tree_preds == 1 & condition_test == 0)
+tree_pred_FN <- length(tree_pred_FN$tree_preds)
+
+
+cat('Model accuracy =', (tree_pred_TP + tree_pred_TN ) / 90 * 100, '\n')
+cat('Model precision =', (tree_pred_TP / (tree_pred_TP + tree_pred_FP) * 100),
+    '\n')
+cat('Model sensitivity =', (tree_pred_TP / (tree_pred_TP + tree_pred_FN) * 100),
+    '\n')
+cat('Model specificity =', (tree_pred_TN / (tree_pred_TN + tree_pred_FP) * 100),
+    '\n')
+```
+So this tree performs quite poorly, at least in comparison to the previous models. A reason for this could be that it is too complex and has over-fit to the training data. In the example terminal node I gave previously, it is pretty unlikely that every patient with attributes that coincide with being placed in that node would actually not have heart disease. To remedy this I can allow rpart to perform cross-validation (10-fold) to select the most optimal value of 'cp' and therefore the model with optimal complexity
+```{r cp tuning, echo = TRUE}
+tree_hd_cp = rpart(condition ~ ., train) 
+# cp left blank, cprintcp shows cross-validation results
+printcp(tree_hd_cp)
+```
+To choose the best cp value, the most simple model within one standard deviation of the best model is generally preferred. The best cross-validation error ('xerror') is 0.457 with a standard deviation of 0.062. So, the simplest model within one standard deviation (with an xerror of 0.457 + 0.062 = 0.519, or less) of that best tree is the third tree. This has a 'cp' value of 0.016 and the tree has five splits. It looks like this:
+```{r plot best cp tree, echo = TRUE}
+tree_hd_cp = prune(tree_hd_cp, cp = 0.015957)
+rpart.plot(tree_hd_cp, digits = 4, type = 5, 
+           box.palette = c('mediumspringgreen', 'firebrick2'))
+```
+You can see this tree is much simpler. It only has eight terminal nodes, half of the previous most complex tree. It has a maximum depth of four, equal with the previous tree.
+How does this tree perform on the test data?
+```{r cp tree test}
+tree_cp_preds = predict(tree_hd_cp, newdata = test)
+
+tree_cp_preds[tree_cp_preds < .5] = '0'
+tree_cp_preds[tree_cp_preds > .5] = '1'
+tree_cp_preds = ifelse(tree_cp_preds[, '0'] == '1', '0', '1')
+
+# show confusion matrix
+table(tree_cp_preds, condition_test)
+
+# turn confusion matrix to data frame
+tree_cp_confMat_df = data.frame(tree_cp_preds, condition_test)
+
+# subset tree_cp_confMat_df to have the true positives
+tree_cp_pred_TP <- subset(tree_cp_confMat_df, 
+                          subset = tree_cp_preds == 0 & condition_test == 0)
+# length of either column equals number of true positives
+tree_cp_pred_TP <- length(tree_cp_pred_TP$tree_cp_preds)
+# repeat for true negatives, false positives and false negatives
+tree_cp_pred_TN <- subset(tree_cp_confMat_df, 
+                          subset = tree_cp_preds == 1 & condition_test == 1)
+tree_cp_pred_TN <- length(tree_cp_pred_TN$tree_cp_preds)
+tree_cp_pred_FP <- subset(tree_cp_confMat_df,
+                          subset = tree_cp_preds == 0 & condition_test == 1)
+tree_cp_pred_FP <- length(tree_cp_pred_FP$tree_cp_preds)
+tree_cp_pred_FN <- subset(tree_cp_confMat_df,
+                          subset = tree_cp_preds == 1 & condition_test == 0)
+tree_cp_pred_FN <- length(tree_cp_pred_FN$tree_cp_preds)
+
+
+cat('Model accuracy =', (tree_cp_pred_TP + tree_cp_pred_TN ) / 90 * 100, '\n')
+cat('Model precision =', 
+    (tree_cp_pred_TP / (tree_cp_pred_TP + tree_cp_pred_FP) * 100), '\n')
+cat('Model sensitivity =', 
+    (tree_cp_pred_TP / (tree_cp_pred_TP + tree_cp_pred_FN) * 100), '\n')
+cat('Model specificity =', 
+    (tree_cp_pred_TN / (tree_cp_pred_TN + tree_cp_pred_FP) * 100), '\n')
+```
+This tree performs exactly the same. The reason for this is that the splits that were removed from the most complex tree resulted in terminal nodes that both predicted the same outcome. By removing those splits (simplifying/pruning the tree), the same predictions are made but the tree is not unnecessarily complex. As mentioned in the logistic regression section, the cut-off value of 0.5 might be hindering the performance. So, like I did before, I'll use a range of values from 0.05 to 0.95, changing by 0.05 to see if that impacts model performance:
+```{r single tree cut-off changes}
+# create a matrix to track model stats
+single_tree_stats = matrix(NA, 19, 4,
+                           dimnames = list(as.character(seq(0.05, 0.95, 0.05)),
+                                           c('Accuracy', 'Precision', 
+                                             'Sensitivity', 'Specificity')))
+
+# run a for loop over the different cut-offs
+for(i in seq(0.05, 0.95, 0.05)){
+  tree_cp_preds_cutOff = predict(tree_hd_cp, newdata = test)
+  
+  # change cut-off
+  tree_cp_preds_cutOff[tree_cp_preds_cutOff < i] = '0'
+  tree_cp_preds_cutOff[tree_cp_preds_cutOff > i] = '1'
+  tree_cp_preds_cutOff = ifelse(tree_cp_preds_cutOff[, '0'] == '1', '0', '1')
+
+  # turn confusion matrix to data frame
+  tree_confMat_df = data.frame(tree_cp_preds_cutOff, condition_test)
+  
+  # subset tree_confMat_df to have the true positives
+  TP <- subset(tree_confMat_df,
+               subset = tree_cp_preds_cutOff == 0 & condition_test == 0)
+  # length of either column equals number of true positives
+  TP <- length(TP$tree_cp_preds_cutOff)
+  # repeat for true negatives, false positives and false negatives
+  TN <- subset(tree_confMat_df,
+               subset = tree_cp_preds_cutOff == 1 & condition_test == 1)
+  TN <- length(TN$tree_cp_preds_cutOff)
+  FP <- subset(tree_confMat_df,
+               subset = tree_cp_preds_cutOff == 0 & condition_test == 1)
+  FP <- length(FP$tree_cp_preds_cutOff)
+  FN <- subset(tree_confMat_df, 
+               subset = tree_cp_preds_cutOff == 1 & condition_test == 0)
+  FN <- length(FN$tree_cp_preds_cutOff)
+
+  # add metrics to matrix
+  single_tree_stats[as.character(i), 'Accuracy'] = (TP + TN) / 90 * 100
+  single_tree_stats[as.character(i), 'Precision'] = (TP / (TP + FP) * 100)
+  single_tree_stats[as.character(i), 'Sensitivity'] = TP / (TP + FN) * 100
+  single_tree_stats[as.character(i), 'Specificity'] = TN / (TN + FP) * 100
+} 
+single_tree_stats
+```
+Here you can see that with a cut-off between 0.3 and 0.65, the model doesn't change. If the cut-off is below 0.3 accuracy, precision and specificity fall while sensitivity increases. As the cut-off increase above 0.65 accuracy also falls as well as sensitivity while precision and specificity increases. On balance I think the best model falls in that 0.3-0.65 range, so I will just add the model with the default 0.5 cut-off to the matrix.
+
+```{r add single tree to matrix, echo = TRUE}
+model_stats['Single classification tree',] = single_tree_stats['0.5',]
+```
+
+### Bagging
+Bagging involves taking repeated samples from the same (training) dataset and then constructing a tree (like in the previous section) on each (bootstrapped) training set. The predictions from all trees are then averaged. All predictors are used in constructing the trees.
+```{r bagging}
+set.seed(35)
+
+# perform bagging (mtry = 13 includes all predictors)
+bag_hd = randomForest(condition ~ ., train, mtry = 13, importance = T)
+
+# compute predictions
+bag_preds = predict(bag_hd, newdata = test)
+
+# show confusion matrix
+table(bag_preds, condition_test)
+
+# turn confusion matrix to data frame
+bag_confMat_df = data.frame(bag_preds, condition_test)
+
+# subset bag_confMat_df to have the true positives
+bag_pred_TP <- subset(bag_confMat_df, 
+                      subset = bag_preds == 0 & condition_test == 0)
+# length of either column equals number of true positives
+bag_pred_TP <- length(bag_pred_TP$bag_preds)
+# repeat for true negatives, false positives and false negatives
+bag_pred_TN <- subset(bag_confMat_df, 
+                      subset = bag_preds == 1 & condition_test == 1)
+bag_pred_TN <- length(bag_pred_TN$bag_preds)
+bag_pred_FP <- subset(bag_confMat_df,
+                      subset = bag_preds == 0 & condition_test == 1)
+bag_pred_FP <- length(bag_pred_FP$bag_preds)
+bag_pred_FN <- subset(bag_confMat_df,
+                      subset = bag_preds == 1 & condition_test == 0)
+bag_pred_FN <- length(bag_pred_FN$bag_preds)
+
+
+cat('Model accuracy =', (bag_pred_TP + bag_pred_TN ) / 90 * 100, '\n')
+cat('Model precision =', (bag_pred_TP / (bag_pred_TP + bag_pred_FP) * 100),
+    '\n')
+cat('Model sensitivity =', (bag_pred_TP / (bag_pred_TP + bag_pred_FN) * 100),
+    '\n')
+cat('Model specificity =', (bag_pred_TN / (bag_pred_TN + bag_pred_FP) * 100),
+    '\n')
+```
+This bagged ensemble is an improvement over a single tree, though it is still not as good as some of the previous approaches. I might be able to improve this model if I increase the number of trees grown. By default it grows 500 trees, but I will see how performance changes by increasing the number of trees by 500 to a maximum of 10,000:
+```{r bagging change number of trees}
+# create a matrix to track model stats
+bag_tree_stats = matrix(NA, 20, 4,
+                        dimnames = list(as.character(seq(500, 10000, 500)),
+                                        c('Accuracy', 'Precision',
+                                          'Sensitivity', 'Specificity')))
+
+# run a for loop over the different tree numbers
+for(i in seq(500, 10000, 500)){
+  set.seed(35)
+  
+  # perform bagging (mtry = 13 includes all predictors)
+  bag_hd = randomForest(condition ~ ., train, mtry = 13, importance = T, 
+                        ntree = i)
+
+  # compute predictions
+  bag_preds = predict(bag_hd, newdata = test)
+
+  # turn confusion matrix to data frame
+  bag_confMat_df = data.frame(bag_preds, condition_test)
+  
+  # subset bag_confMat_df to have the true positives
+  TP <- subset(bag_confMat_df,
+               subset = bag_preds == 0 & condition_test == 0)
+  # length of either column equals number of true positives
+  TP <- length(TP$bag_preds)
+  # repeat for true negatives, false positives and false negatives
+  TN <- subset(bag_confMat_df,
+               subset = bag_preds == 1 & condition_test == 1)
+  TN <- length(TN$bag_preds)
+  FP <- subset(bag_confMat_df,
+               subset = bag_preds == 0 & condition_test == 1)
+  FP <- length(FP$bag_preds)
+  FN <- subset(bag_confMat_df, 
+               subset = bag_preds == 1 & condition_test == 0)
+  FN <- length(FN$bag_preds)
+
+  # add metrics to matrix
+  bag_tree_stats[as.character(i), 'Accuracy'] = (TP + TN) / 90 * 100
+  bag_tree_stats[as.character(i), 'Precision'] = (TP / (TP + FP) * 100)
+  bag_tree_stats[as.character(i), 'Sensitivity'] = TP / (TP + FN) * 100
+  bag_tree_stats[as.character(i), 'Specificity'] = TN / (TN + FP) * 100
+} 
+bag_tree_stats
+```
+You can see that by increasing the number of trees grown to fit the training data the model performance can be increased by a few percent. This improvement stops after 5000 trees. It may appear trivial to try and increase the performance by such a relatively small amount but if this model was being in used in reality a slight improvement means fewer patients who have heart disease are incorrectly classified as not having heart disease. I will add the bagged model with 5000 trees to the matrix:
+```{r add bagged model to matrix, echo = TRUE}
+model_stats['Bagging',] = bag_tree_stats['5000',]
+```
+
+### Random Forest
+A random forest is also fit to bootstrapped training sets but where bagging considers every variable when deciding how to make a split in the tree, random forest only considers a (random) subset of the predictors. In doing this, the trees are decorrelated which is an advantage over the bagged ensemble because the trees grown in bagging tend to look similar (i.e. they are correlated).
+In this analysis, I will allow the model to consider only four of the available 13 predictors. In doing this, we can identify which of the predictors are the most important in improving the model performance:
+```{r rf and importance, echo = TRUE}
+# set seed to allow reproducibility
+set.seed(35)
+# perform random forest
+rf_hd = randomForest(condition ~ ., train, mtry = 4, importance = T)
+# plot of variable importance
+varImpPlot(rf_hd)
+# table of variable importance
+importance(rf_hd)
+```
+In the left hand plot, 'MeanDecreaseAccuracy' is the reduction in the accuracy of the model when a certain variable is excluded from the model, averaged over all trees. When a tree is grown, it only uses a subset of the data (roughly two-thirds) and the other data that aren't used are called out-of-bag. The accuracy of the tree is computed on these out-of-bag samples. So, the best predictors have high values for MeanDecreaseAccuracy because they have the highest reduction in accuracy - the model performs worse when they are excluded.
+In the right hand plot, 'MeanDecreaseGini' is the total decrease in node impurity from splitting the tree on a certain variable, measured by the Gini index, averaged over all trees. The Gini index is a measure of node purity where a small value indicates a node that contain observations from mostly the same class - i.e. a pure node only has observations from one class. So, the best predictors have high values for MeanDecreaseGini because they have the highest reduction in node impurity - nodes from a split on these variables are more pure.
+You can see that 'thallium', 'no_major_vessels' and 'chest_pain' are the top three for 'MeanDecreaseAccuracy' with 'max_heart_rate' replacing 'chest_pain' at third for 'MeanDecreaseGini'.
+So how does the random forest perform on the test set?
+```{r rf predictions}
+# compute predictions
+rf_preds = predict(rf_hd, newdata = test)
+
+# show confusion matrix
+table(rf_preds, condition_test)
+
+# turn confusion matrix to data frame
+rf_confMat_df = data.frame(rf_preds, condition_test)
+
+# subset rf_confMat_df to have the true positives
+rf_pred_TP <- subset(rf_confMat_df, 
+                    subset = rf_preds == 0 & condition_test == 0)
+# length of either column equals number of true positives
+rf_pred_TP <- length(rf_pred_TP$rf_preds)
+# repeat for true negatives, false positives and false negatives
+rf_pred_TN <- subset(rf_confMat_df, 
+                    subset = rf_preds == 1 & condition_test == 1)
+rf_pred_TN <- length(rf_pred_TN$rf_preds)
+rf_pred_FP <- subset(rf_confMat_df,
+                    subset = rf_preds == 0 & condition_test == 1)
+rf_pred_FP <- length(rf_pred_FP$rf_preds)
+rf_pred_FN <- subset(rf_confMat_df,
+                    subset = rf_preds == 1 & condition_test == 0)
+rf_pred_FN <- length(rf_pred_FN$rf_preds)
+
+cat('Model accuracy =', (rf_pred_TP + rf_pred_TN ) / 90 * 100, '\n')
+cat('Model precision =', (rf_pred_TP / (rf_pred_TP + rf_pred_FP) * 100),
+    '\n')
+cat('Model sensitivity =', (rf_pred_TP / (rf_pred_TP + rf_pred_FN) * 100),
+    '\n')
+cat('Model specificity =', (rf_pred_TN / (rf_pred_TN + rf_pred_FP) * 100),
+    '\n')
+```
+Random forest performs better than the bagged ensemble before tuning and is about as good after it was tuned. Random forest can also be tuned by changing the number of predictors considered at each split as well as the number of trees grown. I'll use a range of predictors from 1-6 and a range of trees from 1000-10,000 (varying by 1000) and I'll display the top 10 results in terms of accuracy:
+```{r rf change number of trees and mtry}
+# create list of dimensions, ntrees : mtry
+dim_list = c('1000 : 1', '1000 : 2', '1000 : 3', '1000 : 4', '1000 : 5',
+             '1000 : 6', 
+             '2000 : 1', '2000 : 2', '2000 : 3', '2000 : 4', '2000 : 5',
+             '2000 : 6', 
+             '3000 : 1', '3000 : 2', '3000 : 3', '3000 : 4', '3000 : 5',
+             '3000 : 6', 
+             '4000 : 1', '4000 : 2', '4000 : 3', '4000 : 4', '4000 : 5',
+             '4000 : 6', 
+             '5000 : 1', '5000 : 2', '5000 : 3', '5000 : 4', '5000 : 5',
+             '5000 : 6', 
+             '6000 : 1', '6000 : 2', '6000 : 3', '6000 : 4', '6000 : 5',
+             '6000 : 6', 
+             '7000 : 1', '7000 : 2', '7000 : 3', '7000 : 4', '7000 : 5',
+             '7000 : 6',
+             '8000 : 1', '8000 : 2', '8000 : 3', '8000 : 4', '8000 : 5',
+             '8000 : 6', 
+             '9000 : 1', '9000 : 2', '9000 : 3', '9000 : 4', '9000 : 5',
+             '9000 : 6', 
+             '10000 : 1', '10000 : 2', '10000 : 3', '10000 : 4', '10000 : 5',
+             '10000 : 6')
+
+# create a matrix to track model stats
+rf_tree_stats = matrix(NA, 60, 4,
+                       dimnames = list(dim_list,
+                                       c('Accuracy', 'Precision',
+                                         'Sensitivity', 'Specificity')))
+
+# first for loop changes the number of trees grown
+for(i in seq(1000, 10000, 1000)){
+  # second for loop change the number of variables considered at a split
+  for(j in seq(1, 6, 1)){
+      set.seed(35)
+    
+      # perform random forest 
+      rf_hd = randomForest(condition ~ ., train, mtry = j, importance = T, 
+                           ntree = i)
+
+      # compute predictions
+      rf_preds = predict(rf_hd, newdata = test)
+
+      # turn confusion matrix to data frame
+      rf_confMat_df = data.frame(rf_preds, condition_test)
+  
+      # subset rf_confMat_df to have the true positives
+      TP <- subset(rf_confMat_df,
+                   subset = rf_preds == 0 & condition_test == 0)
+      # length of either column equals number of true positives
+      TP <- length(TP$rf_preds)
+      # repeat for true negatives, false positives and false negatives
+      TN <- subset(rf_confMat_df,
+                   subset = rf_preds == 1 & condition_test == 1)
+      TN <- length(TN$rf_preds)
+      FP <- subset(rf_confMat_df,
+                   subset = rf_preds == 0 & condition_test == 1)
+      FP <- length(FP$rf_preds)
+      FN <- subset(rf_confMat_df, 
+                   subset = rf_preds == 1 & condition_test == 0)
+      FN <- length(FN$rf_preds)
+
+      # add metrics to matrix
+      rf_tree_stats[paste(as.character(i), as.character(j), sep = ' : '), 
+                    'Accuracy'] = (TP + TN) / 90 * 100
+      rf_tree_stats[paste(as.character(i), as.character(j), sep = ' : '), 
+                    'Precision'] = (TP / (TP + FP) * 100)
+      rf_tree_stats[paste(as.character(i), as.character(j), sep = ' : '), 
+                    'Sensitivity'] = TP / (TP + FN) * 100
+      rf_tree_stats[paste(as.character(i), as.character(j), sep = ' : '),
+                    'Specificity'] = TN / (TN + FP) * 100
+  }
+} 
+
+# order the matrix by the first column (accuracy), from high to low
+rf_tree_stats = rf_tree_stats[order(rf_tree_stats[, 1], decreasing = T),]
+# show top 10 models
+head(rf_tree_stats, 10)
+```
+This tells us that if only one (random) variable is considered when making a split in a particular tree, this random forest performs the best. If 1000-7000 trees are grown in this forest the performance is the same and drops off if anymore trees are grown. The accuracy of 90% and sensitivity of 93.62% is the highest of the random forest models while the model with 1000 trees and five variables has the highest precision and specificity. I will add the 1000 tree, one variable random forest to the matrix:
+```{r add rf model to matrix, echo = TRUE}
+model_stats['Random forest',] = rf_tree_stats['1000 : 1',]
+```
+
+### Boosting
+Boosting is similar to the previous two approaches in that an ensemble of trees are grown. Boosting is different in that trees are not grown independently, they are grown slowly using information from previously grown trees.
+```{r boost, echo = TRUE}
+# set seed to allow reproducibility
+set.seed(35)
+
+# transform condition to numeric
+train_boost = train
+train_boost$condition = as.numeric(train_boost$condition)
+train_boost$condition = train_boost$condition - 1
+
+# perform boosting, distribution = 'bernoulli' is used because the outcome has
+# two classes
+boost_hd = gbm(condition ~ ., train_boost, distribution = 'bernoulli', 
+               n.trees = 5000, interaction.depth = 4)
+summary(boost_hd)
+```
+The plot and the table show the relative influence of each variable. So, you can see that this time 'max_heart_rate' is the most influential, followed by 'age' with 'chest_pain', 'cholesterol' and 'thallium' coming in at roughly equal third.
+
+Partial dependence plots can be used to illustrate the marginal effect of these predictors on the response, after integrating out the other variables. I'll just plot the top two for now:
+```{r boost partial dependence plots}
+par(mfrow = c(1, 1))
+plot(boost_hd, i = 'max_heart_rate')
+plot(boost_hd, i = 'age') 
+```
+The y-axis shows how more or less likely a patient is going to be predicted to have heart disease for their given x-axis value.
+So for the left hand plot, patients with a 'max_heart_rate' of greater than 150 are much more likely to be predicted to not have heart disease than patients with a value below 150.
+For the right hand plot, patients who are below 45 and in their early 50s are more likely to be predicted to not have heart disease. Patients who are who are in their late 40s or mid 50s to 60s are more likely to be predicted to have heart disease.
+How does this boosted ensemble perform on the test set?
+```{r boost predictions}
+# transform condition to numeric
+test_boost = test
+test_boost$condition = as.numeric(test_boost$condition)
+test_boost$condition = test_boost$condition - 1
+
+# compute predictions
+boost_preds = predict(boost_hd, newdata = test_boost, n.trees = 5000)
+boost_preds[boost_preds > 0] = '1'
+boost_preds[boost_preds < 0] = '0'
+
+# show confusion matrix
+table(boost_preds, condition_test)
+
+# turn confusion matrix to data frame
+boost_confMat_df = data.frame(boost_preds, condition_test)
+
+# subset boost_confMat_df to have the true positives
+boost_pred_TP <- subset(boost_confMat_df, 
+                        subset = boost_preds == 0 & condition_test == 0)
+# length of either column equals number of true positives
+boost_pred_TP <- length(boost_pred_TP$boost_preds)
+# repeat for true negatives, false positives and false negatives
+boost_pred_TN <- subset(boost_confMat_df, 
+                        subset = boost_preds == 1 & condition_test == 1)
+boost_pred_TN <- length(boost_pred_TN$boost_preds)
+boost_pred_FP <- subset(boost_confMat_df,
+                        subset = boost_preds == 0 & condition_test == 1)
+boost_pred_FP <- length(boost_pred_FP$boost_preds)
+boost_pred_FN <- subset(boost_confMat_df,
+                        subset = boost_preds == 1 & condition_test == 0)
+boost_pred_FN <- length(boost_pred_FN$boost_preds)
+
+cat('Model accuracy =', (boost_pred_TP + boost_pred_TN ) / 90 * 100, '\n')
+cat('Model precision =', (boost_pred_TP / 
+                            (boost_pred_TP + boost_pred_FP) * 100), '\n')
+cat('Model sensitivity =', (boost_pred_TP / 
+                              (boost_pred_TP + boost_pred_FN) * 100), '\n')
+cat('Model specificity =', (boost_pred_TN / 
+                              (boost_pred_TN + boost_pred_FP) * 100), '\n')
+```
+This model performs quite poorly, but it isn't optimised yet. There are a number of parameters that can be tuned:
+1) The number of trees - unlike bagging and random forest, boosting can overfit to the training data if the number of trees is too large. Cross-validation is used to choose the number of trees.
+2) The shrinkage paramater (λ) - this is the rate at which boosting learns.
+3) The number of splits in each tree - controls the complexity of the boosted ensemble, i.e. this is the interaction depth, how deep can trees be.
+4) The minimum number of observations needed in each terminal node
+5) How much of the training data to use - stochastic gradient descent means a subset of the training data is used to grow a tree, a different subset for the next tree, and so on. This increases the speed of running this algorithm, and while it doesn’t guarantee the global minimum of the loss function can be found it does make it more likely that local minimums and plateaus can be overcome.
+To assess how the performance changes when altering these parameters, I will create a grid of different values:
+```{r boost parameter grid, echo = TRUE}
+parameter_grid = expand.grid(
+  shrinkage = c(0.001, 0.01, 0.1), # changes the learning rate
+  interaction.depth = c(1, 2, 3, 4, 5), # changes how deep the tree is
+  n.minobsinnode = c(5, 10, 15), # changes the minimum number of observations
+  # in each terminal node
+  bag.fraction = c(0.65, 0.8, 1), # allows stochastic gradient descent, helps
+  # prevent overfitting
+  optimal_trees = 0, # track the optimal number of trees
+  val_error = 0 # track validation error
+) # 135 models to consider
+```
+A boosted model will be fit to each of the 135 combinations of parameters. The validation error, which measures how well the model performs on the held-out sample of the training data, will be used to compare model performance. To increase the speed of this process, the models will be trained on 75% of the training data and tested on the remaining 25% of the training data:
+```{r boost tuning, echo = TRUE}
+for(i in 1:nrow(parameter_grid)){
+  set.seed(35)
+  boost_hd_tuning = gbm(
+    condition ~., 
+    data = train_boost,
+    distribution = 'bernoulli', 
+    n.trees = 5000, 
+    shrinkage = parameter_grid$shrinkage[i],
+    interaction.depth = parameter_grid$interaction.depth[i],
+    n.minobsinnode = parameter_grid$n.minobsinnode[i],
+    bag.fraction = parameter_grid$bag.fraction[i],
+    train.fraction = 0.75,
+    verbose = F)
+  
+  # add training error and optimal number of trees to grid
+  parameter_grid$optimal_trees[i] = which.min(boost_hd_tuning$valid.error)
+  parameter_grid$val_error[i] = boost_hd_tuning$valid.error
+  
+  # tells me how many models have been considered so far
+  print(i)
+}
+
+parameter_grid %>%
+  arrange(val_error) %>% # arrange grid by validation error, lowest to highest
+  head(10) # show top 10 models
+```
+All of the top 10 performing models had a learning rate of 0.1 which suggests that a higher learning rate might improve performance again.
+Most models had an interaction depth of four or five, this could be increased slightly.
+None of the top 10 had a minimum number of observations in their terminal nodes of five.
+The proportion of training data used varied a lot and will be kept the same.
+The optimal number of trees was very low, with 24 being the highest, so the upper limit of 5000 seems excessive now.
+Based on this, I will modify the parameter grid and re-run this process again:
+```{r boost parameter grid again, echo = TRUE}
+parameter_grid = expand.grid(
+  shrinkage = c(0.1, 0.15, 0.2), # increased learning rate
+  interaction.depth = c(3, 4, 5, 6, 7), # increased depth of tree
+  n.minobsinnode = c(10, 15, 20, 25), # increased the minimum number of observations
+  # in each terminal node
+  bag.fraction = c(0.65, 0.8, 1), # stayed the same
+  optimal_trees = 0, # track the optimal number of trees
+  val_error = 0 # track validation error
+) # 180 models to consider
+```
+```{r boost tuning again, echo = TRUE}
+for(i in 1:nrow(parameter_grid)){
+  set.seed(35)
+  boost_hd_tuning = gbm(
+    condition ~., 
+    data = train_boost,
+    distribution = 'bernoulli', 
+    n.trees = 1000, # dropped from 5000 previously
+    shrinkage = parameter_grid$shrinkage[i],
+    interaction.depth = parameter_grid$interaction.depth[i],
+    n.minobsinnode = parameter_grid$n.minobsinnode[i],
+    bag.fraction = parameter_grid$bag.fraction[i],
+    train.fraction = 0.75,
+    verbose = F)
+  
+  # add training error and optimal number of trees to grid
+  parameter_grid$optimal_trees[i] = which.min(boost_hd_tuning$valid.error)
+  parameter_grid$val_error[i] = boost_hd_tuning$valid.error
+  
+  # tells me how many models have been considered so far
+  print(i)
+}
+parameter_grid %>%
+  arrange(val_error) %>% # arrange grid by validation error, lowest to highest
+  head(10) # show top 10 models
+```
+As a result of the changes, the validation error of the best performing model has fallen from 1.313 previously to 1.241. You could keep fine-tuning the parameters indefinitely but I will stop for now. I'll take the parameters of the best model, look at how it performs on the test set and add it to the matrix.
+```{r test boost}
+# train the model with the best hyperparameters
+set.seed(35)
+boost_hd_tuned = gbm(condition ~., data = train_boost, 
+                     distribution = 'bernoulli', n.trees = 10, 
+                     interaction.depth = 6, shrinkage = 0.2,
+                     n.minobsinnode = 10, bag.fraction = 0.8,
+                     verbose = F)
+
+# compute predictions
+boost_preds = predict(boost_hd_tuned, newdata = test_boost, n.trees = 10)
+boost_preds[boost_preds > 0] = '1'
+boost_preds[boost_preds < 0] = '0'
+
+# show confusion matrix
+#table(boost_preds, condition_test)
+
+# turn confusion matrix to data frame
+boost_confMat_df = data.frame(boost_preds, condition_test)
+
+# subset boost_confMat_df to have the true positives
+boost_pred_TP <- subset(boost_confMat_df, 
+                        subset = boost_preds == 0 & condition_test == 0)
+# length of either column equals number of true positives
+boost_pred_TP <- length(boost_pred_TP$boost_preds)
+# repeat for true negatives, false positives and false negatives
+boost_pred_TN <- subset(boost_confMat_df, 
+                        subset = boost_preds == 1 & condition_test == 1)
+boost_pred_TN <- length(boost_pred_TN$boost_preds)
+boost_pred_FP <- subset(boost_confMat_df,
+                        subset = boost_preds == 0 & condition_test == 1)
+boost_pred_FP <- length(boost_pred_FP$boost_preds)
+boost_pred_FN <- subset(boost_confMat_df,
+                        subset = boost_preds == 1 & condition_test == 0)
+boost_pred_FN <- length(boost_pred_FN$boost_preds)
+
+#cat('Model accuracy =', (boost_pred_TP + boost_pred_TN) / 90 * 100, '\n')
+#cat('Model precision =', (boost_pred_TP / 
+#                            (boost_pred_TP + boost_pred_FP) * 100), '\n')
+#cat('Model sensitivity =', (boost_pred_TP / 
+#                              (boost_pred_TP + boost_pred_FN) * 100), '\n')
+#cat('Model specificity =', (boost_pred_TN / 
+#                              (boost_pred_TN + boost_pred_FP) * 100), '\n')
+
+model_stats['Boosting', 
+            'Accuracy'] = (boost_pred_TP + boost_pred_TN) / 90 * 100
+model_stats['Boosting', 
+            'Precision'] = boost_pred_TP / 
+                              (boost_pred_TP + boost_pred_FP) * 100
+model_stats['Boosting', 
+            'Sensitivity'] = boost_pred_TP / 
+                              (boost_pred_TP + boost_pred_FN) * 100
+model_stats['Boosting', 
+            'Specificity'] = boost_pred_TN / 
+                              (boost_pred_TN + boost_pred_FP) * 100
+```
+
+
+
+# Conclusion
+To recap, five different models were used in this analysis. They were fit (trained) on 70% of the available data comprising of 207 patients and were tested on the remaining 30% or 90 patients. Their performance is measured according to four metrics:
+1) Accuracy - the number of correct predictions (true positives and true negatives) divided by the number of total predictions
+2) Precision - the number of predicted positives that were actually positive (true positives / (true positives + false positives))
+3) Sensitivity - the number of actual positives that were correctly predicted to be positives (true positives / (true positives + false negatives))
+4) Specificity - the number of actual negatives that were correctly predicted to be negatives (true negatives / (true negatives + false positives)).
+
+In the exploratory data analysis section I speculated which predictors would be useful in predicting the response. Logistic regression identified that 'sex', 'chest_pain', 'fasting_blood_sugar', 'exercise_induced_angina', 'no_major_vessels' and 'thallium' were significant in predicting whether a patient had heart disease or not (section ??).
+Random forest identified that 'thallium', 'no_major_vessels' and 'chest_pain' were the top three for 'MeanDecreaseAccuracy' with 'max_heart_rate' replacing 'chest_pain' at third for 'MeanDecreaseGini'.
+
+The performance of the models according to the metrics outlined are as follows:
+```{r model stats}
+model_stats
+```
+The worst model is clearly the single classification tree as it has the lowest scores for all metrics.
+The best model for accuracy achieved a score of 91.1%: k-nearest neighbours where k = 21. This models made the correct prediction of having heart disease or not for 91.1% of the patients in the test set.
+The best model for precision was the logistic regression model containing only the significant predictors, also at 91.1%. Of the total number of predicted positives made by this model, 91.1% of those patients actually were positive (i.e. they were predicted to not have heart disease and that was the correct prediction).
+For sensitivity, k-nearest neighbours comes out on top again with an impressive 95.7%. In the test set, there were a certain number of patients who did not have heart disease and this model identified 95.7% of them.
+Finally, logistic regression with significant variables takes the crown for specificity with 90.7%. In the test set, there were a certain number of patients who did have heart disease and this model identified 90.7% of them.
+So what was the best model overall? Well, that depends. You could say that KNN was the best because it had the highest accuracy and is therefore very consistent at correctly identifying patients who have and don't have heart disease. You could also argue that finding patients who have heart disease is more important than finding those who don't. This would make logistic regression with the significant predictors the best because it had the highest specificity.
+On balance, I would say KNN is the best over logistic regression because although it is slightly worse in precision and specificity it is slightly better in accuracy and far superior in sensitivity.
+
+If you’ve made it this far, thank you for taking the time to read my analysis. I welcome any feedback in the comments.
+
+
+
+
+
+
+
+
+
+
+
+
+
