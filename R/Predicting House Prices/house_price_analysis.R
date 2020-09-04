@@ -555,8 +555,10 @@ which.min(mean_crossVal_errors_bss)
 
 # check the standard errors
 mean_crossVal_errors_bss = data.frame(mean_crossVal_errors_bss)
-mean_crossVal_errors_bss$se = ((sapply(mean_crossVal_errors_bss, sd)) / 
-                                 (sqrt(mean_crossVal_errors_bss)))
+# standard error is the standard deviation of the test MSE for a particular
+# model size divided by the square root of the number of folds
+mean_crossVal_errors_bss$se = ((apply(crossVal_errors_bss, 2, sd)) / 
+                                 (sqrt(10)))
 mean_crossVal_errors_bss$se = unlist(mean_crossVal_errors_bss$se)
 
 plot_bss_cv_theme <- theme(axis.title = element_text(size = 22.5),
@@ -568,21 +570,21 @@ plot_bss_cv <- ggplot(data = mean_crossVal_errors_bss,
   geom_errorbar(aes(ymin = mean_crossVal_errors_bss - se,
                     ymax = mean_crossVal_errors_bss + se)) + 
   # add standard error bars
-  geom_hline(yintercept = 0.1419773, linetype = 2,
+  geom_hline(yintercept = 0.06397989, linetype = 2,
              colour = 'red') + # add line denoting the standard error
   # above the best model
   theme_classic() + # white background, no gridlines
   xlab('Model Size') + # change x axis label
   ylab('Test MSE') + # change y axis label
   plot_bss_cv_theme + # change the size of axis titles and axis text
-  scale_y_continuous(limit = c(-0.05, 0.2)) # change y-axis limits
+  scale_y_continuous(limit = c(0.05, 0.15)) # change y-axis limits
 plot_bss_cv
-# 1 variable model is within one standard error above the chosen best model
+# 13 variable model is within one standard error above the chosen best model
 
-# now perform best subset selection on full data set to obtain a 1
+# now perform best subset selection on full data set to obtain a 13
 # variable model
 best_ss_cv_full = regsubsets(price ~ ., model_data, nvmax = 17)
-coef(best_ss_cv_full, 1)
+coef(best_ss_cv_full, 13)
 summary_best_ss_cv_full = summary(best_ss_cv_full)
 
 # it would also be useful to see how the adjusted R-squared changed
@@ -613,7 +615,7 @@ round(bss_adjRsq$summary_best_ss_cv_full.adjr2, digits = 2)
 
 # put test MSE in matrix
 model_stats['Best subset selection (1 S.E.)', 
-            'Test MSE'] = mean_crossVal_errors_bss$mean_crossVal_errors_bss[1]
+            'Test MSE'] = mean_crossVal_errors_bss$mean_crossVal_errors_bss[13]
 model_stats['Best subset selection (Lowest)', 
             'Test MSE'] = mean_crossVal_errors_bss$mean_crossVal_errors_bss[16]
 
@@ -649,8 +651,8 @@ which.min(mean_crossVal_errors_fwd)
 
 # check the standard errors
 mean_crossVal_errors_fwd = data.frame(mean_crossVal_errors_fwd)
-mean_crossVal_errors_fwd$se = ((sapply(mean_crossVal_errors_fwd, sd)) / 
-                                 (sqrt(mean_crossVal_errors_fwd)))
+mean_crossVal_errors_fwd$se = ((apply(crossVal_errors_fwd, 2, sd)) / 
+                                 (sqrt(10)))
 mean_crossVal_errors_fwd$se = unlist(mean_crossVal_errors_fwd$se)
 
 plot_fwd_cv_theme <- theme(axis.title = element_text(size = 22.5),
@@ -662,22 +664,22 @@ plot_fwd_cv <- ggplot(data = mean_crossVal_errors_fwd,
   geom_errorbar(aes(ymin = mean_crossVal_errors_fwd - se,
                     ymax = mean_crossVal_errors_fwd + se)) + 
   # add standard error bars
-  geom_hline(yintercept = 0.141917, linetype = 2,
+  geom_hline(yintercept = 0.06397989, linetype = 2,
              colour = 'red') + # add line denoting the standard error
   # above the best model
   theme_classic() + # white background, no gridlines
   xlab('Model Size') + # change x axis label
   ylab('Test MSE') + # change y axis label
   plot_fwd_cv_theme + # change the size of axis titles and axis text
-  scale_y_continuous(limit = c(-0.05, 0.2)) # change y-axis limits
+  scale_y_continuous(limit = c(0.05, 0.15)) # change y-axis limits
 plot_fwd_cv
-# 1 variable model is within one standard error above the chosen best model
+# 12 variable model is within one standard error above the chosen best model
 
-# now perform best subset selection on full data set to obtain a 1
+# now perform best subset selection on full data set to obtain a 12
 # variable model
 fwd_ss_cv_full = regsubsets(price ~ ., model_data, nvmax = 17,
                             method = 'forward')
-coef(fwd_ss_cv_full, 1)
+coef(fwd_ss_cv_full, 12)
 summary_fwd_ss_cv_full = summary(fwd_ss_cv_full)
 
 # it would also be useful to see how the adjusted R-squared changed
@@ -708,7 +710,7 @@ round(bss_adjRsq$summary_best_ss_cv_full.adjr2, digits = 2)
 
 # put test MSE in matrix
 model_stats['Forward stepwise selection (1 S.E.)', 
-            'Test MSE'] = mean_crossVal_errors_fwd$mean_crossVal_errors_fwd[1]
+            'Test MSE'] = mean_crossVal_errors_fwd$mean_crossVal_errors_fwd[12]
 model_stats['Forward stepwise selection (Lowest)', 
             'Test MSE'] = mean_crossVal_errors_fwd$mean_crossVal_errors_fwd[16]
 
@@ -744,8 +746,8 @@ which.min(mean_crossVal_errors_bwd)
 
 # check the standard errors
 mean_crossVal_errors_bwd = data.frame(mean_crossVal_errors_bwd)
-mean_crossVal_errors_bwd$se = ((sapply(mean_crossVal_errors_bwd, sd)) / 
-                                 (sqrt(mean_crossVal_errors_bwd)))
+mean_crossVal_errors_bwd$se = ((apply(crossVal_errors_bwd, 2, sd)) / 
+                                 (sqrt(10)))
 mean_crossVal_errors_bwd$se = unlist(mean_crossVal_errors_bwd$se)
 
 plot_bwd_cv_theme <- theme(axis.title = element_text(size = 22.5),
@@ -757,22 +759,22 @@ plot_bwd_cv <- ggplot(data = mean_crossVal_errors_bwd,
   geom_errorbar(aes(ymin = mean_crossVal_errors_bwd - se,
                     ymax = mean_crossVal_errors_bwd + se)) + 
   # add standard error bars
-  geom_hline(yintercept = 0.1434804, linetype = 2,
+  geom_hline(yintercept = 0.06397989, linetype = 2,
              colour = 'red') + # add line denoting the standard error
   # above the best model
   theme_classic() + # white background, no gridlines
   xlab('Model Size') + # change x axis label
   ylab('Test MSE') + # change y axis label
   plot_bwd_cv_theme + # change the size of axis titles and axis text
-  scale_y_continuous(limit = c(-0.05, 0.2)) # change y-axis limits
+  scale_y_continuous(limit = c(0, 0.15)) # change y-axis limits
 plot_bwd_cv
-# 1 variable model is within one standard error above the chosen best model
+# 12 variable model is within one standard error above the chosen best model
 
-# now perform best subset selection on full data set to obtain a 1
+# now perform best subset selection on full data set to obtain a 12
 # variable model
 bwd_ss_cv_full = regsubsets(price ~ ., model_data, nvmax = 17,
                             method = 'backward')
-coef(bwd_ss_cv_full, 1)
+coef(bwd_ss_cv_full, 12)
 summary_bwd_ss_cv_full = summary(bwd_ss_cv_full)
 
 # it would also be useful to see how the adjusted R-squared changed
@@ -803,7 +805,7 @@ round(bss_adjRsq$summary_best_ss_cv_full.adjr2, digits = 2)
 
 # put test MSE in matrix
 model_stats['Backward stepwise selection (1 S.E.)', 
-            'Test MSE'] = mean_crossVal_errors_bwd$mean_crossVal_errors_bwd[1]
+            'Test MSE'] = mean_crossVal_errors_bwd$mean_crossVal_errors_bwd[12]
 model_stats['Backward stepwise selection (Lowest)', 
             'Test MSE'] = mean_crossVal_errors_bwd$mean_crossVal_errors_bwd[16]
 
