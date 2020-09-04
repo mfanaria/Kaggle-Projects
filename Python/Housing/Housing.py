@@ -23,7 +23,6 @@ from mlxtend.feature_selection import ExhaustiveFeatureSelector as EFS
 
 ## Import data
 # set working directory
-os.chdir('/Users/olliethwaites/Documents/OneDrive - Swansea University/Other/Projects/Python/Housing')
 
 # import csv file
 house_data = pd.read_csv('kc_house_data.csv')
